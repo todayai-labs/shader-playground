@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ocean Shader — Sparkles</title>
+<style>
+  * { margin: 0; padding: 0; }
+  body { overflow: hidden; background: #e8e4e0; display: flex; align-items: center; justify-content: center; height: 100vh; }
+  .wrap { position: relative; width: 616px; height: 431px; overflow: hidden; border-radius: 6px; }
+  canvas { display: block; width: 100%; height: 100%; }
+  .paper {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    pointer-events: none; mix-blend-mode: color-burn;
+    object-fit: cover;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <canvas id="c"></canvas>
+  <img class="paper" src="canvas.png" alt="">
+</div>
+<script>
+const CW = 616, CH = 431;
+const canvas = document.getElementById('c');
+const dpr = Math.min(window.devicePixelRatio, 2);
+canvas.width = CW * dpr;
+canvas.height = CH * dpr;
+const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+gl.viewport(0, 0, canvas.width, canvas.height);
+
+function mkS(t, s) { const sh = gl.createShader(t); gl.shaderSource(sh, s); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(sh), s); return sh; }
+function mkP(v, f) { const p = gl.createProgram(); gl.attachShader(p, mkS(gl.VERTEX_SHADER, v)); gl.attachShader(p, mkS(gl.FRAGMENT_SHADER, f)); gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(p)); return p; }
+const qBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, qBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+function bindQ(p) { const l = gl.getAttribLocation(p, 'pos'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 2, gl.FLOAT, false, 0, 0); }
+function makeFBO() {
+  const fb = gl.createFramebuffer(), tx = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tx);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, canvas.width, canvas.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tx, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { fb, tx };
+}
+
+const noiseTex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, noiseTex);
+const nd = new Uint8Array(256*256*4);
+for (let i = 0; i < 256*256; i++) { const v = Math.random()*255; nd[i*4]=v; nd[i*4+1]=v; nd[i*4+2]=v; nd[i*4+3]=255; }
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 256, 0, gl.RGBA, gl.UNSIGNED_BYTE, nd);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+const VS = `attribute vec2 pos; void main(){ gl_Position=vec4(pos,0.0,1.0); }`;
+
+// ========================= PASS 1: Ocean =========================
+const oceanProg = mkP(VS, `
+precision highp float;
+uniform float uTime;
+uniform vec2 uRes;
+uniform vec3 uSunDir;
+uniform sampler2D uNoise;
+
+const float WH=2.7, WS=0.08, WSP=0.06, OR=400.0;
+const vec3 SCOL=vec3(1.0,0.902,0.8);
+const float SSTR=3.0;
+const vec3 SURC=vec3(0.184,0.373,0.42), DEPC=vec3(0.286,0.431,0.529), SCAC=vec3(0.49,0.859,0.792);
+const vec3 CP=vec3(0.0,12.0,0.0), CT=vec3(-3.68,7.85,-4.34);
+const float PI=3.14159265;
+mat2 rot2=mat2(cos(PI),sin(PI),-sin(PI),cos(PI));
+
+float noise(vec2 p){
+  vec2 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
+  float a=texture2D(uNoise,(i+vec2(0.5))/256.0).r;
+  float b=texture2D(uNoise,(i+vec2(1.5,0.5))/256.0).r;
+  float c=texture2D(uNoise,(i+vec2(0.5,1.5))/256.0).r;
+  float d=texture2D(uNoise,(i+vec2(1.5))/256.0).r;
+  return a+(b-a)*u.x+(c-a)*u.y+(a-b-c+d)*u.x*u.y-0.5;
+}
+
+float fbm(vec3 p,int lim){
+  float r=0.0,freq=1.0,amp=1.0; vec2 xz=p.xz;
+  for(int i=0;i<9;i++){if(i>=lim)break;
+    r+=noise(freq*(xz+uTime*WSP*float(9-i+1)))*amp;
+    freq*=1.75; amp*=0.5; xz=rot2*xz;}
+  return r;
+}
+
+float oH(vec2 xz,int o){
+  float h=WH*fbm(vec3(xz.x,0.0,xz.y)*WS,o);
+  float fade=1.0-smoothstep(OR*0.7,OR,length(xz));
+  return mix(-100.0,h,fade);
+}
+
+vec3 sky(vec3 rd){
+  float t=max(rd.y,0.0);
+  vec3 g=mix(vec3(0.35,0.55,0.82),vec3(0.1,0.2,0.45),smoothstep(0.0,0.8,t));
+  vec3 s=mix(vec3(1.0),g,smoothstep(-0.02,0.15,rd.y));
+  float sd=max(dot(rd,uSunDir),0.0);
+  s+=SCOL*pow(sd,256.0)*2.0+SCOL*pow(sd,8.0)*0.3;
+  return s;
+}
+
+float bisect(vec3 ro,vec3 rd,float lo,float hi){
+  for(int j=0;j<6;j++){float m=0.5*(lo+hi);vec3 pm=ro+rd*m;if(pm.y-oH(pm.xz,3)<0.0)hi=m;else lo=m;}
+  return 0.5*(lo+hi);
+}
+
+float march(vec3 ro,vec3 rd,out float hd){
+  if(rd.y>=0.0){hd=1e6;return 0.0;}
+  float ceil=WH*1.1,maxD=OR*3.0,start=0.0;
+  if(ro.y>ceil)start=(ceil-ro.y)/rd.y;
+  hd=start;float ss=0.0;
+  for(int i=0;i<24;i++){
+    vec3 p=ro+rd*hd;float diff=p.y-oH(p.xz,3);
+    if(diff<0.01){hd=bisect(ro,rd,hd-ss,hd);return 1.0;}
+    ss=max(diff*0.5,0.1+hd*0.01);hd+=ss;if(hd>maxD)break;}
+  hd=1e6;return 0.0;
+}
+
+vec3 getNormal(vec3 p,float hd){
+  float eps=(0.05/uRes.y)*pow(hd,1.55);
+  float dx=oH(p.xz-vec2(eps,0.0),7)-oH(p.xz+vec2(eps,0.0),7);
+  float dz=oH(p.xz-vec2(0.0,eps),7)-oH(p.xz+vec2(0.0,eps),7);
+  return normalize(vec3(dx,2.0*eps,dz));
+}
+
+vec3 aces(vec3 x){return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14),0.0,1.0);}
+
+void main(){
+  vec2 ndc=gl_FragCoord.xy/uRes*2.0-1.0;
+  float aspect=uRes.x/uRes.y;
+  vec3 fwd=normalize(CT-CP),rt=normalize(cross(fwd,vec3(0,1,0))),up=cross(rt,fwd);
+  float fov=tan(radians(30.0));
+  vec3 rd=normalize(fwd+rt*ndc.x*fov*aspect+up*ndc.y*fov),ro=CP;
+  vec3 color=sky(rd);
+  float hd;
+  if(march(ro,rd,hd)>0.5){
+    vec3 p=ro+rd*hd,n=getNormal(p,hd),vd=-rd;
+    float cosT=max(dot(n,vd),0.0);
+    float fres=0.02+0.98*pow(1.0-cosT,5.0);
+    vec3 skyC=sky(reflect(rd,n));
+    float crest=clamp(p.y/WH+0.5,0.0,1.0);
+    vec3 baseC=mix(DEPC,SURC,crest);
+    vec3 amb=baseC*0.3;
+    vec3 diff=baseC*max(dot(n,uSunDir),0.0)*0.7;
+    vec3 hDir=normalize(uSunDir+vd);
+    vec3 spec=SCOL*pow(max(dot(n,hDir),0.0),256.0)*SSTR;
+    vec3 blDir=normalize(-uSunDir+n*0.3);
+    vec3 sss=SCAC*pow(max(dot(vd,blDir),0.0),4.0)*1.1*crest;
+    color=mix(amb+diff+sss,skyC,fres)+spec;
+  }
+  color=aces(color);
+  gl_FragColor=vec4(color,1.0);
+}
+`);
+
+// ========================= PASS 2: Blur =========================
+const blurProg = mkP(VS, `
+precision highp float;
+uniform sampler2D uInput;
+uniform vec2 uRes;
+uniform vec2 uDir;
+
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  vec2 texel = 1.0 / uRes;
+  vec3 result = vec3(0.0);
+  float tw = 0.0;
+  // Gaussian blur for dreamy softness
+  const int RADIUS = 9;
+  for (int i = -RADIUS; i <= RADIUS; i++) {
+    float fi = float(i);
+    float w = exp(-0.5 * fi * fi / 50.0);
+    result += texture2D(uInput, uv + uDir * texel * fi * 2.5).rgb * w;
+    tw += w;
+  }
+  gl_FragColor = vec4(result / tw, 1.0);
+}
+`);
+
+// ========================= PASS 3: Sparkle Mask (grid-based, temporal accumulation) =========================
+const sparkleProg = mkP(VS, `
+precision highp float;
+uniform sampler2D uScene;
+uniform sampler2D uPrevMask;
+uniform vec2 uRes;
+uniform float uTime;
+uniform float uSeed;
+
+#define TAU 6.2831853
+
+const int CELL_SEARCH_RADIUS = 3;
+const float cellSize = 20.0;
+const float maxShowDuration = 0.8;
+const float hideDuration = 0.2;
+const float FADE_OUT = 0.82;
+
+const int SPECIES_BASE = 0;
+const int SPECIES_SPIKY = 1;
+const int SPECIES_SPECKLE = 2;
+const int SPECIES_GLINT = 3;
+const int SPECIES_CIRCLE = 4;
+
+const vec2 WEIGHT_BASE = vec2(0.1, 0.6);
+const vec2 WEIGHT_SPIKY = vec2(0.2, 0.3);
+const vec2 WEIGHT_SPECKLE = vec2(0.3, 0.1);
+const vec2 WEIGHT_GLINT = vec2(0.0, 0.5);
+const vec2 WEIGHT_CIRCLE = vec2(2.0, 0.0);
+
+struct SparkleConfig {
+  float showDuration;
+  float fadeInFactor;
+  float fadeOutFactor;
+  float coreSize;
+  float coreBlur;
+  float coreGlowBlur;
+  float coreGlowStrength;
+  float wobbleAmount;
+  vec2 streakCountRange;
+  float streakGlowBlur;
+  vec2 streakLengthRange;
+  float streakAngleJitter;
+  vec2 streakOpacityRange;
+  vec2 coreGlowOffsetRange;
+};
+
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float getLuma(vec3 c) {
+  return dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+float sparkleThreshold(float luma) {
+  return pow(smoothstep(0.7, 1.0, luma), 2.0) * 0.4;
+}
+
+float baseRadius(float luma, vec2 pixel) {
+  float yFrac = pixel.y / uRes.y;
+  float scale = mix(1.0, 0.8, yFrac);
+  return step(0.9, luma) * cellSize * 2.5 * scale;
+}
+
+float getRadius(float luma, float cycleTime, vec2 pixel, float showDuration) {
+  if (cycleTime < showDuration) {
+    return baseRadius(luma, pixel);
+  }
+  return 0.0;
+}
+
+int getSpeciesId(float shapeSelector, float luma) {
+  float wBase = mix(WEIGHT_BASE.x, WEIGHT_BASE.y, luma);
+  float wSpiky = mix(WEIGHT_SPIKY.x, WEIGHT_SPIKY.y, luma);
+  float wSpeckle = mix(WEIGHT_SPECKLE.x, WEIGHT_SPECKLE.y, luma);
+  float wGlint = mix(WEIGHT_GLINT.x, WEIGHT_GLINT.y, luma);
+  float wCircle = mix(WEIGHT_CIRCLE.x, WEIGHT_CIRCLE.y, luma);
+  float total = wBase + wSpiky + wSpeckle + wGlint + wCircle;
+  float r = shapeSelector * total;
+  if (r < wBase) return SPECIES_BASE;
+  if (r < wBase + wSpiky) return SPECIES_SPIKY;
+  if (r < wBase + wSpiky + wSpeckle) return SPECIES_SPECKLE;
+  if (r < wBase + wSpiky + wSpeckle + wGlint) return SPECIES_GLINT;
+  return SPECIES_CIRCLE;
+}
+
+SparkleConfig getConfig(int speciesId) {
+  SparkleConfig c;
+  c.showDuration = 1.0; c.fadeInFactor = 0.1; c.fadeOutFactor = 0.8;
+  c.coreSize = 0.6; c.coreBlur = 0.6;
+  c.coreGlowBlur = 20.0; c.coreGlowStrength = 0.65;
+  c.wobbleAmount = 0.2;
+  c.streakCountRange = vec2(4.0, 4.0); c.streakGlowBlur = 17.0;
+  c.streakLengthRange = vec2(3.0, 4.0); c.streakAngleJitter = 0.05;
+  c.streakOpacityRange = vec2(0.8, 1.0);
+  c.coreGlowOffsetRange = vec2(-2.0, 0.0);
+
+  if (speciesId == SPECIES_SPIKY) {
+    c.showDuration = 0.8; c.fadeInFactor = 0.2; c.fadeOutFactor = 0.2;
+    c.coreSize = 0.5; c.coreBlur = 0.7;
+    c.coreGlowBlur = 20.0; c.coreGlowStrength = 0.95;
+    c.wobbleAmount = 0.5;
+    c.streakCountRange = vec2(5.0, 9.0); c.streakGlowBlur = 0.3;
+    c.streakLengthRange = vec2(5.5, 6.0); c.streakAngleJitter = 0.9;
+    c.streakOpacityRange = vec2(0.2, 0.7);
+    c.coreGlowOffsetRange = vec2(-2.0, 0.0);
+  }
+  if (speciesId == SPECIES_SPECKLE) {
+    c.showDuration = 0.2; c.fadeInFactor = 0.5; c.fadeOutFactor = 0.2;
+    c.coreSize = 0.5; c.coreBlur = 0.6;
+    c.coreGlowBlur = 20.0; c.coreGlowStrength = 0.55;
+    c.wobbleAmount = 0.5;
+    c.streakCountRange = vec2(0.0, 3.0); c.streakGlowBlur = 5.0;
+    c.streakLengthRange = vec2(1.0, 1.5); c.streakAngleJitter = 0.5;
+    c.streakOpacityRange = vec2(0.8, 0.9);
+    c.coreGlowOffsetRange = vec2(-2.0, 2.0);
+  }
+  if (speciesId == SPECIES_GLINT) {
+    c.showDuration = 0.2; c.fadeInFactor = 0.5; c.fadeOutFactor = 0.2;
+    c.coreSize = 0.3; c.coreBlur = 2.0;
+    c.coreGlowBlur = 20.0; c.coreGlowStrength = 0.55;
+    c.wobbleAmount = 0.3;
+    c.streakCountRange = vec2(0.0, 4.0); c.streakGlowBlur = 5.0;
+    c.streakLengthRange = vec2(0.5, 1.0); c.streakAngleJitter = 0.0;
+    c.streakOpacityRange = vec2(0.3, 0.5);
+    c.coreGlowOffsetRange = vec2(-1.0, 1.0);
+  }
+  if (speciesId == SPECIES_CIRCLE) {
+    c.showDuration = 1.5; c.fadeInFactor = 0.3; c.fadeOutFactor = 0.7;
+    c.coreSize = 0.9; c.coreBlur = 1.0;
+    c.coreGlowBlur = 0.0; c.coreGlowStrength = 0.0;
+    c.wobbleAmount = 0.1;
+    c.streakCountRange = vec2(0.0, 0.0); c.streakGlowBlur = 0.0;
+    c.streakLengthRange = vec2(0.0, 0.0); c.streakAngleJitter = 0.0;
+    c.streakOpacityRange = vec2(0.0, 0.0);
+    c.coreGlowOffsetRange = vec2(0.0, 0.0);
+  }
+  return c;
+}
+
+float streakOpacityFn(float t, int speciesId) {
+  if (speciesId == SPECIES_SPECKLE) return 0.0;
+  if (speciesId == SPECIES_GLINT) return 0.0;
+  if (speciesId == SPECIES_SPIKY) return 1.0;
+  if (speciesId == SPECIES_BASE) return 1.3 - t;
+  return 1.0;
+}
+
+float streakWidthFn(float t, float len, int speciesId) {
+  if (speciesId == SPECIES_SPECKLE) {
+    float taper = mix(6.0, 50.0, clamp((len - 3.0) / 6.0, 0.0, 1.0));
+    return 1.0 * pow(1.0 - t, taper);
+  }
+  if (speciesId == SPECIES_GLINT) {
+    float taper = mix(6.0, 50.0, clamp((len - 3.0) / 6.0, 0.0, 1.0));
+    return 1.0 * pow(1.0 - t, taper);
+  }
+  if (speciesId == SPECIES_SPIKY) {
+    float taper = mix(6.0, 30.0, clamp((len - 3.0) / 4.0, 0.0, 1.0));
+    return 2.0 * pow(1.0 - t, taper);
+  }
+  float taper = mix(6.0, 50.0, clamp((len - 3.0) / 6.0, 0.0, 1.0));
+  return 2.0 * pow(1.0 - t, taper);
+}
+
+float streakGlowOpacityFn(float t, int speciesId) {
+  if (speciesId == SPECIES_SPECKLE) return 1.0 - t;
+  if (speciesId == SPECIES_GLINT) return 1.0 - t;
+  if (speciesId == SPECIES_SPIKY) return 0.9 - t;
+  return 0.9 - t;
+}
+
+vec3 sparkleShape(vec2 pixel, vec2 cellCoords, float radius, float cycleTime,
+                  float streakStretchAmount, SparkleConfig config, int speciesId) {
+  vec2 cellCenter = (cellCoords + 0.5) * cellSize;
+  vec2 toPixel = pixel - cellCenter;
+  float pixelDist = length(toPixel);
+  float pixelAngle = atan(toPixel.y, toPixel.x);
+
+  float showDuration = config.showDuration;
+  float coreSize = config.coreSize;
+  float coreBlur = config.coreBlur;
+  float coreGlowBlur = config.coreGlowBlur;
+  float coreGlowStrength = config.coreGlowStrength;
+  float wobbleAmount = config.wobbleAmount;
+  float streakGlowBlur = config.streakGlowBlur;
+
+  float streakRotation = -TAU / 14.0 * (0.5 + 0.5 * sin(uTime * 0.3));
+
+  float h1 = hash(cellCoords + vec2(7.0, 3.0));
+  float h2 = hash(cellCoords + vec2(5.0, 11.0));
+  float wobble = 1.0
+    + wobbleAmount * 0.2 * sin(pixelAngle * 2.0 + uTime * 0.3 + h1 * TAU)
+    + wobbleAmount * 0.1 * sin(pixelAngle * 3.0 + uTime * 0.2 + h2 * TAU);
+
+  float fadeInEnd = showDuration * config.fadeInFactor;
+  float fadeOutStart = max(showDuration * (1.0 - config.fadeOutFactor), fadeInEnd);
+  float fadeIn = fadeInEnd > 0.0 ? smoothstep(0.0, fadeInEnd, cycleTime) : 1.0;
+  float fadeOut = fadeOutStart < showDuration ? 1.0 - smoothstep(fadeOutStart, showDuration, cycleTime) : 1.0;
+  float fadeEnvelope = fadeIn * fadeOut;
+
+  float coreDist = (pixelDist / wobble) / max(radius * coreSize, 1.0);
+  float coreDistClamp = clamp(coreDist, 0.0, 1.0);
+  float coreAmount = 1.0 - smoothstep(0.85 * (1.0 - coreBlur), 0.85, coreDistClamp);
+
+  float coreEdge = max(radius * coreSize, 1.0) * wobble * 0.45;
+  float glowOffsetY = mix(config.coreGlowOffsetRange.x, config.coreGlowOffsetRange.y,
+                          hash(cellCoords + vec2(31.0, 47.0)));
+  float coreGlowPixelDist = length(toPixel - vec2(0.0, glowOffsetY));
+  float coreGlowDist = max(coreGlowPixelDist - coreEdge, 0.0);
+  float coreGlowAmount = 0.0;
+  if (coreGlowBlur > 0.0) {
+    float coreGlowFalloff = 1.0 - clamp(coreGlowDist / coreGlowBlur, 0.0, 1.0);
+    coreGlowAmount = coreGlowFalloff * coreGlowFalloff * coreGlowStrength;
+  }
+
+  float streakCount = floor(mix(config.streakCountRange.x, config.streakCountRange.y + 1.0, h1));
+  streakCount = clamp(streakCount, config.streakCountRange.x, config.streakCountRange.y);
+
+  if (streakCount == 0.0) {
+    return vec3(coreAmount, 0.0, coreGlowAmount) * fadeEnvelope;
+  }
+
+  float growAnimation = 1.0 - pow(1.0 - clamp(cycleTime / (showDuration * 0.4), 0.0, 1.0), 3.0);
+  float baseSpacing = TAU / streakCount;
+
+  float approxIndex = floor((pixelAngle - streakRotation) / baseSpacing + 0.5);
+  float bestAngleDist = TAU;
+  float bestStreakLength = 0.0;
+  float bestSpikeOpacity = 1.0;
+  for (float offset = -1.0; offset <= 1.0; offset += 1.0) {
+    float i = mod(approxIndex + offset, streakCount);
+    float jitter = (hash(cellCoords + vec2(i * 5.17, i * 3.31)) - 0.5) * baseSpacing * config.streakAngleJitter;
+    float spikeAngle = streakRotation + i * baseSpacing + jitter;
+    float ad = abs(mod(pixelAngle - spikeAngle + 3.14159, TAU) - 3.14159);
+    if (ad < bestAngleDist) {
+      bestAngleDist = ad;
+      float spikeLen = mix(config.streakLengthRange.x, config.streakLengthRange.y,
+                           hash(cellCoords + vec2(i * 7.13, i * 11.97)));
+      float distFromAxis = abs(mod(spikeAngle - streakRotation + 3.14159, TAU) - 3.14159);
+      float stretch = (distFromAxis < 0.2) ? streakStretchAmount : 1.0;
+      bestStreakLength = spikeLen * growAnimation * stretch;
+      bestSpikeOpacity = mix(config.streakOpacityRange.x, config.streakOpacityRange.y,
+                             hash(cellCoords + vec2(i * 13.37, i * 17.53)));
+    }
+  }
+
+  float streakDist = coreDist / bestStreakLength;
+  float streakDistClamp = clamp(streakDist, 0.0, 1.0);
+  float streakMask = step(streakDist, 1.0);
+
+  float sw = streakWidthFn(streakDist, bestStreakLength, speciesId);
+  float streakShape = smoothstep(sw, sw * 0.15, bestAngleDist);
+  float streakAmount = streakShape * streakOpacityFn(streakDistClamp, speciesId) * streakMask * bestSpikeOpacity;
+
+  float streakGlowDist = sin(max(bestAngleDist - sw, 0.0)) * pixelDist;
+  float streakGlowAmount = (1.0 - clamp(streakGlowDist / streakGlowBlur, 0.0, 1.0))
+    * streakGlowOpacityFn(streakDistClamp, speciesId) * streakMask * bestSpikeOpacity;
+
+  return vec3(coreAmount, max(streakAmount, streakGlowAmount), coreGlowAmount) * fadeEnvelope;
+}
+
+vec4 computeSparkleMask(vec2 pixel) {
+  vec2 cell = floor(pixel / cellSize);
+  const float streakStretch = 1.6;
+  float streakStretchAmount = 1.0 + (streakStretch - 1.0) * pow(max(sin(uTime * TAU / 2.0), 0.0), 2.0);
+
+  float maxRadius = cellSize * 2.5;
+  float maxStreakLen = max(5.0 * streakStretchAmount, 2.0);
+  float maxReach = maxRadius * max(maxStreakLen, 1.0) + maxRadius * 0.5;
+  int searchRadius = int(ceil(maxReach / cellSize)) + 1;
+  if (searchRadius > CELL_SEARCH_RADIUS) searchRadius = CELL_SEARCH_RADIUS;
+  maxReach *= maxReach;
+
+  vec4 maxMask = vec4(0.0);
+
+  for (int dx = -CELL_SEARCH_RADIUS; dx <= CELL_SEARCH_RADIUS; dx++) {
+    if (dx < -searchRadius || dx > searchRadius) continue;
+    for (int dy = -CELL_SEARCH_RADIUS; dy <= CELL_SEARCH_RADIUS; dy++) {
+      if (dy < -searchRadius || dy > searchRadius) continue;
+      vec2 cellCoords = cell + vec2(float(dx), float(dy));
+      vec2 cellCenter = (cellCoords + 0.5) * cellSize;
+
+      vec2 toPixel = pixel - cellCenter;
+      if (dot(toPixel, toPixel) > maxReach) continue;
+
+      vec2 cellUv = cellCenter / uRes;
+      if (cellUv.x < 0.0 || cellUv.x > 1.0 || cellUv.y < 0.0 || cellUv.y > 1.0) continue;
+      vec4 cellSample = texture2D(uScene, cellUv);
+      float luma = getLuma(cellSample.rgb);
+
+      float phaseOffset = hash(cellCoords + vec2(42.0, 13.0));
+      float cycleDuration = maxShowDuration + hideDuration;
+      float cellCycleDuration = cycleDuration * mix(0.8, 1.2, hash(cellCoords + vec2(77.0, 31.0)));
+      float localTime = uTime + phaseOffset * cellCycleDuration;
+      float cycleIndex = floor(localTime / cellCycleDuration);
+      float cycleTime = mod(localTime, cellCycleDuration);
+
+      float shapeSelector = hash(cellCoords + vec2(cycleIndex * 3.14, cycleIndex * 1.41));
+      int speciesId = getSpeciesId(shapeSelector, luma);
+      SparkleConfig config = getConfig(speciesId);
+
+      float showCycleThreshold = hash(cellCoords + vec2(cycleIndex * 1.731, cycleIndex * 2.399));
+      if (showCycleThreshold >= sparkleThreshold(luma)) continue;
+
+      float radius = getRadius(luma, cycleTime, cellCenter, config.showDuration);
+      radius *= mix(0.9, 1.1, hash(cellCoords + vec2(123.0, 456.0)));
+
+      float streakReach = radius * max(maxStreakLen, 1.0) + radius * 0.5;
+      float reach = streakReach * streakReach;
+      if (dot(toPixel, toPixel) > reach) continue;
+
+      vec3 mask = sparkleShape(pixel, cellCoords, radius, cycleTime, streakStretchAmount, config, speciesId);
+      float isCircle = (speciesId == SPECIES_CIRCLE) ? 1.0 : 0.0;
+      if (mask.r > maxMask.r) {
+        maxMask.a = isCircle;
+      }
+      maxMask.rgb = max(maxMask.rgb, mask.rgb);
+    }
+  }
+  return maxMask;
+}
+
+void main() {
+  vec2 pixel = gl_FragCoord.xy;
+  vec2 uv = pixel / uRes;
+
+  vec4 mask = computeSparkleMask(pixel);
+  vec4 prev = texture2D(uPrevMask, uv);
+  vec4 base = prev * FADE_OUT;
+  vec4 result;
+  result.rgb = max(base.rgb, mask.rgb);
+  result.a = (mask.r > base.r) ? mask.a : base.a;
+
+  gl_FragColor = result;
+}
+`);
+
+// ========================= PASS 4: Composite =========================
+const compositeProg = mkP(VS, `
+precision highp float;
+uniform sampler2D uSharp;
+uniform sampler2D uBlur;
+uniform sampler2D uSparkleMask;
+uniform vec2 uRes;
+uniform float uTime;
+uniform float uSeed;
+
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+
+// Original config
+const vec3 RISO_COL = vec3(0.259, 0.482, 0.541);  // #427b8a
+const vec3 BG_COL = vec3(0.949, 0.941, 0.933);     // #F2F0EE
+const vec3 HIGHLIGHT_COL = vec3(0.682, 0.765, 0.769); // #aec3c4
+const float DOT_SPACING = 1.0;
+const float DOT_RADIUS = 0.5;
+const float BLUR_AMOUNT = 0.48;
+const float BORDER_RISO_FADE = 15.0;
+const float BORDER_BLUR_FADE = 15.0;
+const float BORDER_BLUR_INSET = 12.0;
+
+// Sparkle colors
+const vec3 CORE_COL = vec3(1.0);                     // #ffffff
+const vec3 CORE2_COL = vec3(0.910, 0.859, 0.820);    // #e8dbd1
+const vec3 GLOW_COL = vec3(1.0, 0.902, 0.831);       // #ffe6d4
+const vec3 STREAK_COL = vec3(1.0, 0.973, 0.875);     // #FFF8DF
+
+vec3 toSrgb(vec3 c){ return pow(max(c,0.0), vec3(1.0/2.2)); }
+vec3 toLinear(vec3 c){ return pow(max(c,0.0), vec3(2.2)); }
+
+vec3 hardLight(vec3 base, vec3 blend){
+  return mix(2.0*base*blend, 1.0-2.0*(1.0-base)*(1.0-blend), step(0.5, blend));
+}
+
+// FM halftone — stochastic screen using blue-noise-like hash
+float dotCoverage(vec2 pixel, float luma){
+  float threshold = 1.0 - luma;
+  // Stochastic screening: per-pixel random compared to threshold
+  float r = hash(pixel + vec2(37.7, 91.1));
+  float dot = step(r, threshold * 0.85);
+  // Slight spatial variation for organic feel
+  float r2 = hash(floor(pixel / 2.0) + vec2(13.3, 7.7));
+  dot *= 0.7 + 0.3 * r2;
+  return dot;
+}
+
+
+// Rounded border with noise
+float borderMask(vec2 pixel, vec2 res){
+  float pad = 8.0;
+  vec2 center = res * 0.5;
+  vec2 halfSize = res * 0.5 - vec2(pad);
+  float cornerRadius = 14.0;
+  vec2 ed = abs(pixel - center) - halfSize + cornerRadius;
+  float rd = length(max(ed, 0.0)) + min(max(ed.x, ed.y), 0.0) - cornerRadius;
+
+  float nf = (hash(pixel * 0.011 + uSeed) - 0.5) * 12.0;
+  float borderDist = rd + nf;
+
+  float risoMask = smoothstep(0.0, BORDER_RISO_FADE, -borderDist);
+  float blurMask = smoothstep(BORDER_BLUR_FADE, BORDER_BLUR_INSET, -borderDist);
+  return risoMask;
+}
+
+void main(){
+  vec2 pixel = gl_FragCoord.xy;
+  vec2 uv = pixel / uRes;
+
+  vec3 sharp = texture2D(uSharp, uv).rgb;
+  vec3 blur = texture2D(uBlur, uv).rgb;
+
+  // Blend sharp and blur (blurAmount=0.7 means 70% blur)
+  vec3 scene = mix(sharp, blur, BLUR_AMOUNT);
+  // Brighten to match original's light pastel quality with warm tint
+  scene = scene * 1.3 + 0.06;
+  scene.r += 0.015;
+
+  // Border calculations
+  float border = borderMask(pixel, uRes);
+  float borderDist2 = 0.0;
+  {
+    float pad = 8.0;
+    vec2 center = uRes * 0.5;
+    vec2 halfSize = uRes * 0.5 - vec2(pad);
+    float cornerRadius = 14.0;
+    vec2 ed = abs(pixel - center) - halfSize + cornerRadius;
+    borderDist2 = length(max(ed, 0.0)) + min(max(ed.x, ed.y), 0.0) - cornerRadius;
+  }
+  float blurBorderFade = smoothstep(BORDER_BLUR_FADE, BORDER_BLUR_INSET, -borderDist2);
+
+  // For transparent areas, show blurred version
+  vec3 color = scene;
+
+  // Convert to sRGB for riso processing
+  vec3 srgbScene = toSrgb(color);
+  float luma = dot(srgbScene, vec3(0.299, 0.587, 0.114));
+
+  // Halftone dots
+  float dotFadeOut = 1.0 - border;
+  float coverage = dotCoverage(pixel, luma) * (1.0 - dotFadeOut);
+  vec3 risoSrgb = toSrgb(vec3(0.259, 0.482, 0.541));
+  vec3 riso = mix(vec3(1.0), risoSrgb, coverage);
+
+  // hardLight blend in sRGB space
+  vec3 blended = hardLight(srgbScene, riso);
+  color = mix(srgbScene, blended, 1.0);
+
+  // Apply blur to border areas
+  vec3 blurSrgb = toSrgb(blur);
+  color = mix(color, blurSrgb, 1.0 - blurBorderFade);
+
+  // Read pre-computed sparkle mask (R=core, G=streaks, B=glow, A=circleFactor)
+  vec4 sMask = texture2D(uSparkleMask, uv);
+  float coreMask = sMask.r;
+  float streakMask = sMask.g;
+  float coreGlowMask = sMask.b;
+  float circleFactor = sMask.a;
+
+  // Apply sparkles with hardLight blend (matching original compositor)
+  vec3 blendedCoreColor = mix(CORE_COL, CORE2_COL, circleFactor);
+  vec3 withCore = mix(color, hardLight(color, blendedCoreColor), coreMask);
+  vec3 withGlow = mix(withCore, hardLight(withCore, GLOW_COL), coreGlowMask * (1.0 - coreMask));
+  vec3 withStreaks = mix(withGlow, hardLight(withGlow, STREAK_COL), streakMask);
+  color = withStreaks;
+
+  // Border fade to background
+  color = mix(BG_COL, color, border);
+
+  // Paper grain
+  float grain = (hash(pixel + fract(uTime * 0.3)) - 0.5) * 0.035;
+  color += grain;
+
+  gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+}
+`);
+
+const oceanFBO = makeFBO();
+const blurFBO_H = makeFBO();
+const blurFBO_V = makeFBO();
+const sparkleFBO_A = makeFBO();
+const sparkleFBO_B = makeFBO();
+let sparkleSwap = false;
+
+const uOT = gl.getUniformLocation(oceanProg, 'uTime');
+const uOR = gl.getUniformLocation(oceanProg, 'uRes');
+const uOS = gl.getUniformLocation(oceanProg, 'uSunDir');
+const uON = gl.getUniformLocation(oceanProg, 'uNoise');
+
+const uBI = gl.getUniformLocation(blurProg, 'uInput');
+const uBR = gl.getUniformLocation(blurProg, 'uRes');
+const uBD = gl.getUniformLocation(blurProg, 'uDir');
+
+const uSpScene = gl.getUniformLocation(sparkleProg, 'uScene');
+const uSpPrev = gl.getUniformLocation(sparkleProg, 'uPrevMask');
+const uSpR = gl.getUniformLocation(sparkleProg, 'uRes');
+const uSpT = gl.getUniformLocation(sparkleProg, 'uTime');
+const uSpSeed = gl.getUniformLocation(sparkleProg, 'uSeed');
+
+const uCS = gl.getUniformLocation(compositeProg, 'uSharp');
+const uCB = gl.getUniformLocation(compositeProg, 'uBlur');
+const uCSM = gl.getUniformLocation(compositeProg, 'uSparkleMask');
+const uCR = gl.getUniformLocation(compositeProg, 'uRes');
+const uCT = gl.getUniformLocation(compositeProg, 'uTime');
+const uCSeed = gl.getUniformLocation(compositeProg, 'uSeed');
+
+const azBase = -2.8, elBase = 0.85, seed = Math.random();
+let mx=0, my=0, smx=0, smy=0;
+window.addEventListener('mousemove', e => {
+  mx = (e.clientX / window.innerWidth - 0.5) * 2;
+  my = (e.clientY / window.innerHeight - 0.5) * 2;
+});
+
+let time=0, last=performance.now();
+(function loop(){
+  requestAnimationFrame(loop);
+  const now=performance.now(); time+=(now-last)/1000; last=now;
+  smx+=(mx-smx)*0.03; smy+=(my-smy)*0.03;
+  const az=azBase-0.5*smx, el=elBase+0.3*smy;
+  const sdx=Math.cos(el)*Math.sin(az), sdy=Math.sin(el), sdz=Math.cos(el)*Math.cos(az);
+  const len=Math.sqrt(sdx*sdx+sdy*sdy+sdz*sdz);
+
+  // Pass 1: Ocean → FBO
+  gl.bindFramebuffer(gl.FRAMEBUFFER, oceanFBO.fb);
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.useProgram(oceanProg);
+  gl.bindBuffer(gl.ARRAY_BUFFER, qBuf); bindQ(oceanProg);
+  gl.uniform1f(uOT,time); gl.uniform2f(uOR,canvas.width,canvas.height);
+  gl.uniform3f(uOS,sdx/len,sdy/len,sdz/len);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, noiseTex); gl.uniform1i(uON,0);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+
+  // Pass 2a: Horizontal blur
+  gl.bindFramebuffer(gl.FRAMEBUFFER, blurFBO_H.fb);
+  gl.useProgram(blurProg);
+  gl.bindBuffer(gl.ARRAY_BUFFER, qBuf); bindQ(blurProg);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, oceanFBO.tx); gl.uniform1i(uBI,0);
+  gl.uniform2f(uBR,canvas.width,canvas.height); gl.uniform2f(uBD,1.0,0.0);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+
+  // Pass 2b: Vertical blur
+  gl.bindFramebuffer(gl.FRAMEBUFFER, blurFBO_V.fb);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, blurFBO_H.tx); gl.uniform1i(uBI,0);
+  gl.uniform2f(uBD,0.0,1.0);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+
+  // Pass 3: Sparkle mask with temporal accumulation (double-buffered)
+  const prevFBO = sparkleSwap ? sparkleFBO_B : sparkleFBO_A;
+  const currFBO = sparkleSwap ? sparkleFBO_A : sparkleFBO_B;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, currFBO.fb);
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.useProgram(sparkleProg);
+  gl.bindBuffer(gl.ARRAY_BUFFER, qBuf); bindQ(sparkleProg);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, oceanFBO.tx); gl.uniform1i(uSpScene,0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, prevFBO.tx); gl.uniform1i(uSpPrev,1);
+  gl.uniform2f(uSpR,canvas.width,canvas.height);
+  gl.uniform1f(uSpT,time); gl.uniform1f(uSpSeed,seed);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  sparkleSwap = !sparkleSwap;
+
+  // Pass 4: Composite → screen
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.useProgram(compositeProg);
+  gl.bindBuffer(gl.ARRAY_BUFFER, qBuf); bindQ(compositeProg);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, oceanFBO.tx); gl.uniform1i(uCS,0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, blurFBO_V.tx); gl.uniform1i(uCB,1);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, currFBO.tx); gl.uniform1i(uCSM,2);
+  gl.uniform2f(uCR,canvas.width,canvas.height);
+  gl.uniform1f(uCT,time); gl.uniform1f(uCSeed,seed);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+})();
+</script>
+</body>
+</html>
