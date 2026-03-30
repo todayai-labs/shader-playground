@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shader Playground</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #f2f0ee;
+    font-family: 'Georgia', serif;
+    color: #333;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 60px 20px;
+  }
+  h1 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    margin-bottom: 40px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 32px;
+    max-width: 700px;
+    width: 100%;
+  }
+  .card {
+    text-decoration: none;
+    color: inherit;
+    border-radius: 6px;
+    overflow: hidden;
+    transition: transform 0.25s, box-shadow 0.25s;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  .card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+  }
+  .card .thumb {
+    width: 100%;
+    aspect-ratio: 1.4;
+    object-fit: cover;
+    display: block;
+    background: #e0d8d0;
+  }
+  .card .info {
+    padding: 14px 16px;
+  }
+  .card .info h2 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .card .info p {
+    font-size: 0.72rem;
+    color: #888;
+    line-height: 1.5;
+  }
+  .kbd {
+    display: inline-block;
+    background: #e8e4e0;
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-family: monospace;
+    font-size: 0.7rem;
+    color: #666;
+    margin-left: 2px;
+  }
+  .hint {
+    margin-top: 40px;
+    font-size: 0.72rem;
+    color: #aaa;
+  }
+</style>
+</head>
+<body>
+
+<h1>Shader Playground</h1>
+
+<div class="grid" id="grid"></div>
+
+<p class="hint">Press <span class="kbd">←</span> <span class="kbd">→</span> to navigate between shaders on each page</p>
+
+<script>
+const SHADERS = [
+  { id: 'ocean', title: 'Ocean Shader', desc: 'Sparkles on ocean surface — raw WebGL2 fullscreen shader', url: 'ocean-shader.html' },
+  { id: 'garden', title: 'Garden', desc: 'Dappled light through invisible trees — Three.js PCSS + OKLab color grading', url: 'garden/index.html' },
+  { id: 'sparkles', title: 'Sparkles', desc: 'Lake with raymarched waves, sun glints, and halftone overlay', url: 'sparkles/index.html' },
+];
+
+// expose for nav bar
+window.__SHADERS = SHADERS;
+
+const grid = document.getElementById('grid');
+SHADERS.forEach(s => {
+  const a = document.createElement('a');
+  a.className = 'card';
+  a.href = s.url;
+  a.innerHTML = `<div class="thumb" style="background:linear-gradient(135deg,#d8d0c8,#c8c0b8)"></div>
+    <div class="info"><h2>${s.title}</h2><p>${s.desc}</p></div>`;
+  grid.appendChild(a);
+});
+</script>
+</body>
+</html>

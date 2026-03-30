@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Garden</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #f2f0ee;
+            font-family: 'Georgia', serif;
+            color: #333;
+        }
+        .page {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+        }
+        .title {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .title h1 {
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+        .title p {
+            font-size: 0.75rem;
+            color: #888;
+            margin-top: 2px;
+        }
+        .canvas {
+            aspect-ratio: 1.341;
+            width: 540px;
+            margin: auto;
+            display: flex;
+            position: relative;
+        }
+        .scene {
+            aspect-ratio: 1.341;
+            width: calc(100% - 5px);
+            margin: auto;
+            display: flex;
+        }
+        .scene canvas {
+            border-radius: 2px;
+            width: 100% !important;
+            height: 100% !important;
+        }
+        .grass {
+            pointer-events: none;
+            mix-blend-mode: screen;
+            background: url(textures/grass.webp) center/cover no-repeat;
+            position: absolute;
+            top: 0; bottom: 0; left: 0; right: 0;
+        }
+        .cover {
+            pointer-events: none;
+            mix-blend-mode: darken;
+            background: url(textures/cover.png) center/cover no-repeat;
+            outline: 30px solid #f2f0ee;
+            position: absolute;
+            top: 0; bottom: 0; left: 0; right: 0;
+        }
+        .desc {
+            width: 500px;
+            margin-top: 24px;
+            font-size: 0.8rem;
+            line-height: 1.6;
+            color: #666;
+        }
+        .desc strong {
+            display: block;
+            font-size: 0.75rem;
+            margin-top: 12px;
+        }
+        @media screen and (max-width: 580px) {
+            .canvas { width: 300px; height: 350px; }
+            .desc { width: 340px; }
+        }
+    </style>
+<script src="../nav.js" defer></script>
+</head>
+<body>
+    <div class="page">
+        <div class="title">
+            <h1>Garden</h1>
+            <p>Feb 2026</p>
+        </div>
+        <div class="canvas">
+            <div class="scene" id="scene-container"></div>
+            <div class="grass" aria-hidden="true"></div>
+            <div class="cover" aria-hidden="true"></div>
+        </div>
+        <div class="desc">
+            <p>Snuggle into the sun warmed grass. Stay still, and you might befriend a butterfly.</p>
+            <strong>Dev Notes.</strong>
+            <p>Fork of <em>Dappled light</em>. Made with post-processing color grading passes, hand drawn grass, and foliage rules.</p>
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>
