@@ -4,6 +4,7 @@
         { id: 'ocean', title: 'Ocean Shader', url: '/ocean-shader.html' },
         { id: 'garden', title: 'Garden', url: '/garden/index.html' },
         { id: 'sparkles', title: 'Sparkles', url: '/sparkles/index.html' },
+        { id: 'fog', title: 'Fog hover', url: '/fog/index.html' },
     ];
 
     const path = location.pathname;

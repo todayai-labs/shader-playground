@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fog hover</title>
+<script src="../nav.js" defer></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #e8e4e0;
+    font-family: 'Georgia', serif;
+    color: #333;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 50px 20px 40px;
+  }
+  .title { text-align: center; margin-bottom: 20px; }
+  .title h1 { font-size: 1rem; font-weight: 600; }
+  .title p { font-size: 0.75rem; color: #888; margin-top: 2px; }
+  .desc {
+    width: 480px; margin-top: 20px;
+    font-size: 0.8rem; line-height: 1.6; color: #666;
+  }
+  .desc strong { display: block; font-size: 0.75rem; margin-top: 12px; }
+  .code {
+    letter-spacing: -0.2px; color: #313030;
+    background-color: rgba(0,0,0,0.07);
+    border-radius: 0.2rem; padding: 0.05rem 0.4rem 0.12rem;
+    font-size: 0.77rem; font-weight: 400;
+    box-shadow: inset 0 0.5px 1px rgba(0,0,0,0.1);
+  }
+
+  /* Book layout */
+  .book-wrapper {
+    flex-direction: column; align-items: center;
+    margin-top: 24px; display: flex;
+  }
+  .book-body {
+    --flicker-scale: 0.2;
+    justify-content: center; align-items: center;
+    gap: 2px; display: flex;
+    animation: flicker1 8.3s ease-in-out infinite, flicker2 11.1s ease-in-out infinite;
+  }
+  .book-caption {
+    text-align: center; opacity: 0; cursor: default;
+    margin-top: 20px; margin-bottom: -20px;
+    font-size: 0.7rem; transition: opacity 2s ease-out;
+  }
+  .book-caption.visible { opacity: 0.5; }
+
+  @keyframes flicker1 {
+    0%, 100% { opacity: 1; }
+    10% { opacity: calc(1 - var(--flicker-scale)*1); }
+    30% { opacity: calc(1 - var(--flicker-scale)*0.5); }
+    50% { opacity: calc(1 - var(--flicker-scale)*0.75); }
+    70% { opacity: calc(1 - var(--flicker-scale)*0.3); }
+    90% { opacity: 1; }
+  }
+  @keyframes flicker2 {
+    0%, 100% { opacity: 1; }
+    15% { opacity: calc(1 - var(--flicker-scale)*0.9); }
+    45% { opacity: calc(1 - var(--flicker-scale)*0.5); }
+    65% { opacity: calc(1 - var(--flicker-scale)*0.75); }
+    85% { opacity: calc(1 - var(--flicker-scale)*0.9); }
+  }
+
+  /* Spotlight */
+  .media-wrapper {
+    display: inline-block; position: relative; overflow: hidden;
+  }
+  .media-base, .media-spotlight {
+    transition: transform 1s;
+  }
+  .media-base {
+    object-fit: cover; border-radius: 4px;
+    width: 100%; height: auto; display: block; position: relative;
+  }
+  .media-spotlight {
+    cursor: crosshair; object-fit: cover;
+    width: 100%; height: 100%;
+    opacity: var(--mask-alpha);
+    z-index: 1;
+    mask-image: radial-gradient(circle 80px at var(--x) var(--y), black 0%, transparent 100%);
+    -webkit-mask-image: radial-gradient(circle 80px at var(--x) var(--y), black 0%, transparent 100%);
+    border-radius: 4px;
+    transition: opacity 1s;
+    position: absolute; top: 0; left: 0;
+    mask-repeat: no-repeat;
+    -webkit-mask-repeat: no-repeat;
+  }
+  .scale-on-hover:hover .media-base,
+  .scale-on-hover:hover .media-spotlight {
+    transition: transform 0.8s;
+    transform: scale(1.01);
+  }
+
+  #shunreal { margin-right: 10px; transform: rotate(-3deg); }
+  #sun { transform: rotate(2deg); }
+
+  ::-webkit-media-controls-panel { display: none !important; }
+  ::-webkit-media-controls-start-playback-button { display: none !important; }
+
+  @media (max-width: 580px) {
+    .desc { width: 340px; padding-left: 0.5rem; }
+  }
+</style>
+</head>
+<body>
+
+<div class="title">
+  <h1>Fog hover</h1>
+  <p>Apr 2025</p>
+</div>
+
+<div class="book-wrapper">
+  <div class="book-body">
+    <div id="shunreal" class="media-wrapper scale-on-hover"
+         style="--x:0px;--y:0px;--mask-alpha:0;width:140px">
+      <video class="media-base" style="opacity:0.1"
+             src="shunreal.mp4" autoplay muted loop playsinline></video>
+      <video class="media-spotlight"
+             src="shunreal.mp4" autoplay muted loop playsinline></video>
+    </div>
+    <div id="sun" class="media-wrapper scale-on-hover"
+         style="--x:0px;--y:0px;--mask-alpha:0;width:130px">
+      <img class="media-base" src="sun.webp" style="opacity:0.1" alt="">
+      <img class="media-spotlight" src="sun.webp" alt="">
+    </div>
+  </div>
+  <p class="book-caption">trees and shadows from my camera</p>
+</div>
+
+<div class="desc">
+  <p>Inspired by SF weather, fog blurs our vision and invites reflection. Move your cursor to reveal the image.</p>
+  <strong>Dev Notes.</strong>
+  <p>[01] This effect has two layers: the underlying image and hover image. The hover layer applies a radial gradient mask with <span class="code">mask-image</span> to create a spotlight around the cursor.</p>
+  <p style="margin-top:8px">[02] On hover, the image subtly zooms in.</p>
+</div>
+
+<script>
+const caption = document.querySelector('.book-caption');
+
+document.querySelectorAll('.media-wrapper').forEach(el => {
+  el.addEventListener('mousemove', e => {
+    const rect = el.getBoundingClientRect();
+    el.style.setProperty('--x', (e.clientX - rect.left) + 'px');
+    el.style.setProperty('--y', (e.clientY - rect.top) + 'px');
+  });
+  el.addEventListener('mouseenter', () => {
+    el.style.setProperty('--mask-alpha', '1');
+    caption.classList.add('visible');
+  });
+  el.addEventListener('mouseleave', () => {
+    el.style.setProperty('--mask-alpha', '0');
+    caption.classList.remove('visible');
+  });
+});
+</script>
+</body>
+</html>
