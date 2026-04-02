@@ -6,6 +6,8 @@
         { id: 'sparkles', title: 'Sparkles', url: '/sparkles/index.html' },
         { id: 'fog', title: 'Fog hover', url: '/fog/index.html' },
         { id: 'landscape', title: 'Landscape', url: '/landscape/index.html' },
+        { id: 'sparkles-mobile', title: 'Sparkles 9:21', url: '/sparkles-mobile/index.html' },
+        { id: 'sky', title: 'Sky', url: '/sky/index.html' },
     ];
 
     const path = location.pathname;

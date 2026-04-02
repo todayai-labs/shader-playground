@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<title>Sparkles Mobile</title>
+<script src="../nav.js?v=2" defer></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #e8e4e0; }
+  body {
+    display: flex; flex-direction: column;
+    align-items: center;
+    padding: 50px 20px 40px;
+    font-family: 'Georgia', serif; color: #333;
+  }
+  .title { text-align: center; margin-bottom: 20px; }
+  .title h1 { font-size: 1rem; font-weight: 600; }
+  .title p { font-size: 0.75rem; color: #888; margin-top: 2px; }
+  .wrap {
+    position: relative;
+    width: 280px; height: 605px;
+    overflow: hidden;
+    border-radius: 8px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+  .paper {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    mix-blend-mode: color-burn;
+    object-fit: cover;
+  }
+  .desc {
+    width: 280px; margin-top: 20px;
+    font-size: 0.8rem; line-height: 1.6; color: #666;
+  }
+  .desc strong { display: block; font-size: 0.75rem; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<div class="title">
+  <h1>Sparkles — iPhone 9:21</h1>
+  <p>Mar 2026</p>
+</div>
+
+<div class="wrap">
+  <canvas id="c"></canvas>
+  <img class="paper" src="canvas.png" alt="">
+</div>
+
+<div class="desc">
+  <p>Sparkles on a lake — full 4-pass pipeline at 9:21 iPhone portrait ratio.</p>
+  <strong>Dev Notes.</strong>
+  <p>Raymarching, post processed sparkles, and frequency modulated halftones.</p>
+</div>
+
+<script>
+const wrap = document.querySelector('.wrap');
+const canvas = document.getElementById('c');
+const dpr = Math.min(window.devicePixelRatio, 2);
+const CW = wrap.clientWidth;
+const CH = wrap.clientHeight;
+canvas.width = CW * dpr;
+canvas.height = CH * dpr;
+const gl = canvas.getContext('webgl2');
+if (!gl) { document.body.innerHTML = '<p>WebGL2 required</p>'; throw ''; }
+
+const CONFIG = {
+  waveHeight: 2.7,
+  waveScale: 0.08,
+  waveSpeed: 0.06,
+  oceanRadius: 400,
+  sunAzimuth: -2.8,
+  sunElevation: 0.85,
+  sunColor: [1.0, 0.902, 0.8],
+  sunStrength: 3.0,
+  surfaceColor: [0.184, 0.373, 0.42],
+  depthColor: [0.286, 0.431, 0.529],
+  scatterColor: [0.49, 0.859, 0.792],
+  cameraPos: [-2.22, 20.84, 11.94],
+  lookAt: [-3.68, 7.85, -4.34],
+  fov: 60,
+};
+
+const SPARKLE_CONFIG = {
+  cellSearchRadius: 4,
+  cellSize: 20.0,
+  fadeIn: 0.55,
+  fadeOut: 0.82,
+  maxShowDuration: 0.8,
+  hideDuration: 0.2,
+  coreColor: [1.0, 1.0, 1.0],
+  secondaryCoreColor: [0.91, 0.86, 0.82],
+  coreGlowColor: [1.0, 0.9, 0.83],
+  streakColor: [1.0, 0.973, 0.875],
+};
+
+const RISO_CONFIG = {
+  bgColor: [0.949, 0.941, 0.933],
+  color: [0.259, 0.482, 0.541],
+  dotSpacing: 1.0,
+  dotRadius: 0.5,
+  blurRadius: 100.0,
+  blurAmount: 0.7,
+  highlightColor: [0.682, 0.765, 0.769],
+  borderRisoFade: 15.0,
+  borderBlurFade: 15.0,
+  borderBlurInset: 12.0,
+};
+
+const quadVert = `#version 300 es
+precision highp float;
+in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+`;
+
+const oceanFrag = `#version 300 es
+precision highp float;
+out vec4 outColor;
+uniform float uTime;
+uniform vec2 uResolution;
+uniform vec3 uCameraPos;
+uniform mat4 uProjectionMatrixInverse;
+uniform mat4 uViewMatrixInverse;
+uniform float uWaveHeight;
+uniform float uWaveScale;
+uniform float uWaveSpeed;
+uniform vec3 uSunDirection;
+uniform vec3 uSurfaceColor;
+uniform vec3 uScatterColor;
+uniform sampler2D uNoiseTexture;
+uniform float uOceanRadius;
+uniform vec3 uSunColor;
+uniform float uSunStrength;
+uniform vec3 uDepthColor;
+
+float noise(vec2 p) {
+    vec2 i = floor(p); vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = texture(uNoiseTexture, (i + vec2(0.5, 0.5)) * 0.00390625).r;
+    float b = texture(uNoiseTexture, (i + vec2(1.5, 0.5)) * 0.00390625).r;
+    float c = texture(uNoiseTexture, (i + vec2(0.5, 1.5)) * 0.00390625).r;
+    float d = texture(uNoiseTexture, (i + vec2(1.5, 1.5)) * 0.00390625).r;
+    return a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y - 0.5;
+}
+const float angle = 3.14;
+const float sA = sin(angle), cA = cos(angle);
+const mat2 octaveRotation = mat2(cA, sA, -sA, cA);
+
+float fbm(vec3 pos, int limit) {
+    float res = 0.0, freq = 1.0, amp = 1.0;
+    for (int i = 0; i < 9; i++) {
+        if (i >= limit) break;
+        res += noise(freq * (pos.xz + uTime * (uWaveSpeed * float(9 - i + 1)))) * amp;
+        freq *= 1.75; amp *= 0.5; pos.xz *= octaveRotation;
+    }
+    return res;
+}
+float oceanHeight(vec2 xz, int oct) {
+    float r = uWaveHeight * fbm(vec3(xz.x, 0.0, xz.y) * uWaveScale, oct);
+    return mix(-100.0, r, 1.0 - smoothstep(uOceanRadius * 0.7, uOceanRadius, length(xz)));
+}
+vec3 getSkyColor(vec3 rd) {
+    float t = max(rd.y, 0.0);
+    vec3 sky = mix(vec3(1), mix(vec3(0.35,0.55,0.82), vec3(0.1,0.2,0.45), smoothstep(0.0,0.8,t)), smoothstep(-0.02,0.15,rd.y));
+    float sd = max(dot(rd, uSunDirection), 0.0);
+    sky += uSunColor * pow(sd, 256.0) * 2.0 + uSunColor * pow(sd, 8.0) * 0.3;
+    return sky;
+}
+float approxHit(vec3 ro, vec3 rd, float lo, float hi) {
+    for (int j = 0; j < 6; j++) { float m=0.5*(lo+hi); if((ro+rd*m).y - oceanHeight((ro+rd*m).xz,3)<0.0) hi=m; else lo=m; }
+    return 0.5*(lo+hi);
+}
+void main() {
+    vec2 ndc = (gl_FragCoord.xy / uResolution) * 2.0 - 1.0;
+    vec4 vs = uProjectionMatrixInverse * vec4(ndc, 1.0, 1.0);
+    vec3 rd = normalize((uViewMatrixInverse * vec4(vs.xy, -1.0, 0.0)).xyz);
+    vec3 color = getSkyColor(rd);
+    if (rd.y < 0.0) {
+        float ceil = uWaveHeight*1.1, hd = 0.0, ss = 0.0;
+        if (uCameraPos.y > ceil) hd = (ceil - uCameraPos.y)/rd.y;
+        for (int i = 0; i < 24; i++) {
+            vec3 p = uCameraPos + rd*hd;
+            float df = p.y - oceanHeight(p.xz, 3);
+            if (df < 0.01) { hd = approxHit(uCameraPos, rd, hd-ss, hd); break; }
+            ss = max(df*0.5, 0.1+hd*0.01); hd += ss;
+            if (hd > 1200.0) { hd = 1e6; break; }
+        }
+        if (hd < 1e5) {
+            vec3 p = uCameraPos + rd*hd;
+            float eps = (0.05/uResolution.y)*pow(hd, 1.55);
+            float dx = oceanHeight(p.xz-vec2(eps,0),7) - oceanHeight(p.xz+vec2(eps,0),7);
+            float dz = oceanHeight(p.xz-vec2(0,eps),7) - oceanHeight(p.xz+vec2(0,eps),7);
+            vec3 n = normalize(vec3(dx, 2.0*eps, dz));
+            vec3 vd = -rd;
+            float fr = 0.02 + 0.98*pow(1.0-max(dot(n,vd),0.0), 5.0);
+            vec3 refl = getSkyColor(reflect(rd, n));
+            float cr = clamp(p.y/uWaveHeight+0.5, 0.0, 1.0);
+            vec3 wc = mix(uDepthColor, uSurfaceColor, cr);
+            vec3 amb = wc*0.3, dif = wc*max(dot(n,uSunDirection),0.0)*0.7;
+            float sp = pow(max(dot(n, normalize(uSunDirection+vd)), 0.0), 256.0);
+            vec3 spec = uSunColor*sp*uSunStrength;
+            vec3 bl = normalize(-uSunDirection+n*0.3);
+            vec3 sss = uScatterColor*pow(max(dot(vd,bl),0.0),4.0)*1.1*cr;
+            color = mix(amb+dif+sss, refl, fr) + spec;
+        }
+    }
+    color = clamp((color*(2.51*color+0.03))/(color*(2.43*color+0.59)+0.14), 0.0, 1.0);
+    outColor = vec4(pow(color, vec3(1.0/2.2)), 1.0);
+}
+`;
+
+const sparkleMaskFrag = `#version 300 es
+precision highp float;
+out vec4 outColor;
+uniform float time; uniform vec2 resolution;
+uniform sampler2D inputBuffer; uniform sampler2D prevBuffer;
+uniform float fadeOut, fadeIn, maxShowDuration, hideDuration, seed;
+uniform vec2 contentPadding;
+#define TAU 6.2831853
+
+struct SC { float sd,fif,fof,cs,cb,cgb,cgs,wa; vec2 scr; float sgb; vec2 slr; float saj; vec2 sor,cgor; };
+const int CSR=4; const float cSz=20.0;
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float n1d(float t,float pd){float i=floor(t),f=fract(t);f=f*f*(3.0-2.0*f);return mix(hash(vec2(mod(i,pd),0.0)),hash(vec2(mod(i+1.0,pd),0.0)),f);}
+float bsn(vec2 p){float a=atan(p.y,p.x)+3.14159;float t=a/TAU;return(0.65*n1d(t*12.0+seed,12.0)+0.35*n1d(t*23.0+seed*3.7,23.0)-0.45)*4.0;}
+float bd(vec2 p,vec2 c,vec2 hs){float cr=15.0;vec2 ed=abs(p-c)-hs+cr;return length(max(ed,0.0))+min(max(ed.x,ed.y),0.0)-cr+bsn(p-c);}
+float getLuma(vec3 c){return dot(c,vec3(0.299,0.587,0.114));}
+float sThresh(float l){return pow(smoothstep(0.7,1.0,l),2.0)*0.4;}
+float bRad(float l,vec2 px){return step(0.9,l)*cSz*2.5*mix(1.0,0.8,px.y/resolution.y);}
+
+int getSp(float s,float l){
+    float w0=mix(0.1,0.6,l),w1=mix(0.2,0.3,l),w2=mix(0.3,0.1,l),w3=mix(0.0,0.5,l),w4=mix(2.0,0.0,l);
+    float r=s*(w0+w1+w2+w3+w4);
+    if(r<w0)return 0;if(r<w0+w1)return 1;if(r<w0+w1+w2)return 2;if(r<w0+w1+w2+w3)return 3;return 4;
+}
+SC getCfg(int sp){
+    SC c;c.sd=1.0;c.fif=0.1;c.fof=0.8;c.cs=0.6;c.cb=0.6;c.cgb=20.0;c.cgs=0.65;c.wa=0.2;
+    c.scr=vec2(4,4);c.sgb=17.0;c.slr=vec2(3,4);c.saj=0.05;c.sor=vec2(0.8,1);c.cgor=vec2(-2,0);
+    if(sp==1){c.sd=0.8;c.fif=0.2;c.fof=0.2;c.cs=0.5;c.cb=0.7;c.cgs=0.95;c.wa=0.5;c.scr=vec2(5,9);c.sgb=0.3;c.slr=vec2(5.5,6);c.saj=0.9;c.sor=vec2(0.2,0.7);}
+    if(sp==2){c.sd=0.2;c.fif=0.5;c.fof=0.2;c.cs=0.5;c.cgs=0.55;c.wa=0.5;c.scr=vec2(0,3);c.sgb=5.0;c.slr=vec2(1,1.5);c.saj=0.5;c.sor=vec2(0.8,0.9);c.cgor=vec2(-2,2);}
+    if(sp==3){c.sd=0.2;c.fif=0.5;c.fof=0.2;c.cs=0.3;c.cb=2.0;c.cgs=0.55;c.wa=0.3;c.scr=vec2(0,4);c.sgb=5.0;c.slr=vec2(0.5,1);c.saj=0.0;c.sor=vec2(0.3,0.5);c.cgor=vec2(-1,1);}
+    if(sp==4){c.sd=1.5;c.fif=0.3;c.fof=0.7;c.cs=0.9;c.cb=1.0;c.cgb=0.0;c.cgs=0.0;c.wa=0.1;c.scr=vec2(0,0);c.sgb=10.0;c.slr=vec2(2,4);c.saj=0.1;c.cgor=vec2(-2,0);}
+    return c;
+}
+float swFn(float t,float l,int sp){float tp=mix(6.0,50.0,clamp((l-3.0)/6.0,0.0,1.0));if(sp==1)return 2.0*pow(1.0-t,mix(6.0,30.0,clamp((l-3.0)/4.0,0.0,1.0)));return(sp<3?1.0:2.0)*pow(1.0-t,tp);}
+float soFn(float t,int sp){if(sp==2||sp==3)return 0.0;if(sp==1)return 1.0;if(sp==0)return 1.3-t;return 1.0;}
+float sgoFn(float t,int sp){return(sp==1)?0.9-t:((sp<2)?0.9-t:1.0-t);}
+
+vec3 sparkleShape(vec2 px,vec2 cc,float rad,float ct,float ssa,SC cfg,int sp){
+    vec2 ctr=(cc+0.5)*cSz,tp=px-ctr;
+    float pd=length(tp),pa=atan(tp.y,tp.x);
+    float h1=hash(cc+vec2(7,3)),h2=hash(cc+vec2(5,11));
+    float wb=1.0+cfg.wa*0.2*sin(pa*2.0+time*0.3+h1*TAU)+cfg.wa*0.1*sin(pa*3.0+time*0.2+h2*TAU);
+    float feI=cfg.fif>0.0?smoothstep(0.0,cfg.sd*cfg.fif,ct):1.0;
+    float fOS=max(cfg.sd*(1.0-cfg.fof),cfg.sd*cfg.fif);
+    float feO=fOS<cfg.sd?1.0-smoothstep(fOS,cfg.sd,ct):1.0;
+    float fe=feI*feO;
+    float cd=(pd/wb)/max(rad*cfg.cs,1.0),cdc=clamp(cd,0.0,1.0);
+    float core=(1.0-smoothstep(0.85*(1.0-cfg.cb),0.85,cdc))*fe;
+    float ce=max(rad*cfg.cs,1.0)*wb*0.45;
+    float goy=mix(cfg.cgor.x,cfg.cgor.y,hash(cc+vec2(31,47)));
+    float gpd=length(tp-vec2(0,goy)),gd=max(gpd-ce,0.0),ga=0.0;
+    if(cfg.cgb>0.0){float gf=1.0-clamp(gd/cfg.cgb,0.0,1.0);ga=gf*gf*cfg.cgs*fe;}
+    float sc=floor(mix(cfg.scr.x,cfg.scr.y+1.0,h1));sc=clamp(sc,cfg.scr.x,cfg.scr.y);
+    if(sc==0.0)return vec3(core,0,ga)*fe;
+    float gr=1.0-pow(1.0-clamp(ct/(cfg.sd*0.4),0.0,1.0),3.0);
+    float bs=TAU/sc,sr=-TAU/14.0*(0.5+0.5*sin(time*0.3));
+    float ai=floor((pa-sr)/bs+0.5),ba=TAU,sl=0.0,so=1.0;
+    for(float o=-1.0;o<=1.0;o+=1.0){float i=mod(ai+o,sc);float j=(hash(cc+vec2(i*5.17,i*3.31))-0.5)*bs*cfg.saj;float sa=sr+i*bs+j;float ad=abs(mod(pa-sa+3.14159,TAU)-3.14159);if(ad<ba){ba=ad;sl=mix(cfg.slr.x,cfg.slr.y,hash(cc+vec2(i*7.13,i*11.97)))*gr;float da=abs(mod(sa-sr+3.14159,TAU)-3.14159);if(da<0.2)sl*=ssa;so=mix(cfg.sor.x,cfg.sor.y,hash(cc+vec2(i*13.37,i*17.53)));}}
+    float sd=cd/sl,sdc=clamp(sd,0.0,1.0),sm=step(sd,1.0);
+    float sw=swFn(sd,sl,sp);
+    float strk=smoothstep(sw,sw*0.15,ba)*soFn(sdc,sp)*sm*so*fe;
+    float sgd=sin(max(ba-sw,0.0))*pd;
+    float sgl=(1.0-clamp(sgd/cfg.sgb,0.0,1.0))*sgoFn(sdc,sp)*sm*so*fe;
+    return vec3(core,max(strk,sgl),ga)*fe;
+}
+
+void main(){
+    vec2 px=gl_FragCoord.xy,uv=px/resolution;
+    vec4 cs=texture(inputBuffer,uv);
+    if(cs.a<0.01){outColor=vec4(0);return;}
+    vec2 cell=floor(px/cSz);
+    float ssa=1.0+0.6*pow(max(sin(time*TAU/2.0),0.0),2.0);
+    float mr=cSz*2.5,msl=max(5.0*ssa,2.0),mrc=mr*max(msl,1.0)+mr*0.5;
+    int sr=min(int(ceil(mrc/cSz))+1,CSR);mrc*=mrc;
+    vec2 cMin=contentPadding*resolution,cMax=(1.0-contentPadding)*resolution;
+    vec2 bc=(cMin+cMax)*0.5,bhs=(cMax-cMin)*0.5;
+    vec4 maxM=vec4(0);
+    for(int dx=-CSR;dx<=CSR;dx++){if(dx<-sr||dx>sr)continue;for(int dy=-CSR;dy<=CSR;dy++){if(dy<-sr||dy>sr)continue;
+        vec2 cc=cell+vec2(float(dx),float(dy)),ctr=(cc+0.5)*cSz;
+        if(bd(ctr,bc,bhs)>0.0)continue;
+        vec2 tp=px-ctr;if(dot(tp,tp)>mrc)continue;
+        float cl=getLuma(texture(inputBuffer,ctr/resolution).rgb);
+        float po=hash(cc+vec2(42,13)),cd2=(maxShowDuration+hideDuration)*mix(0.8,1.2,hash(cc+vec2(77,31)));
+        float lt=time+po*cd2,ci=floor(lt/cd2),ct=mod(lt,cd2);
+        float ss=hash(cc+vec2(ci*3.14,ci*1.41));int sp=getSp(ss,cl);SC cfg=getCfg(sp);
+        if(hash(cc+vec2(ci*1.731,ci*2.399))>=sThresh(cl))continue;
+        float rad=bRad(cl,ctr)*mix(0.9,1.1,hash(cc+vec2(123,456)));if(rad<0.5)continue;
+        float rch=rad*max(msl,1.0)+rad*0.5;rch*=rch;if(dot(tp,tp)>rch)continue;
+        vec3 m=sparkleShape(px,cc,rad,ct,ssa,cfg,sp);
+        float ic=(sp==4)?1.0:0.0;if(m.r>maxM.r)maxM.a=ic;
+        maxM.rgb=max(maxM.rgb,m);
+    }}
+    vec4 prev=texture(prevBuffer,uv)*fadeOut;
+    outColor=vec4(max(prev.rgb,maxM.rgb),(maxM.r>prev.r)?maxM.a:prev.a);
+}
+`;
+
+const compositeFrag = `#version 300 es
+precision highp float;
+out vec4 outColor;
+uniform sampler2D inputBuffer, sparkleMask;
+uniform vec3 coreColor, secondaryCoreColor, coreGlowColor, streakColor;
+uniform vec2 uResolution;
+vec3 hl(vec3 b,vec3 bl){return mix(2.0*b*bl,1.0-2.0*(1.0-b)*(1.0-bl),step(0.5,bl));}
+void main(){
+    vec2 uv=gl_FragCoord.xy/uResolution;
+    vec4 inp=texture(inputBuffer,uv);
+    vec4 mv=texture(sparkleMask,uv);
+    vec3 b=inp.rgb;
+    vec3 cc=mix(coreColor,secondaryCoreColor,mv.a);
+    vec3 wc=mix(b,hl(b,cc),mv.r);
+    vec3 wg=mix(wc,hl(wc,coreGlowColor),mv.b*(1.0-mv.r));
+    outColor=vec4(mix(wg,hl(wg,streakColor),mv.g),inp.a);
+}
+`;
+
+const risoFrag = `#version 300 es
+precision highp float;
+out vec4 outColor;
+uniform sampler2D inputBuffer;
+uniform vec2 resolution;
+uniform vec3 color,highlightColor,bgColor;
+uniform float dotSpacing,dotRadius,blurRadius,blurAmount,borderRisoFade,borderBlurFade,borderBlurInset,seed;
+#define TAU 6.2831853
+
+const float bn[1024]=float[1024](0.5454,0.0083,0.3589,0.5015,0.6685,0.3052,0.1030,0.3608,0.5669,0.7642,0.2515,0.8267,0.3110,0.7476,0.3853,0.8481,0.4966,0.9917,0.4380,0.8589,0.5884,0.1372,0.4751,0.1929,0.6187,0.8784,0.1187,0.7144,0.5552,0.3657,0.6421,0.2954,0.6948,0.9048,0.2495,0.7456,0.1948,0.5425,0.8394,0.7104,0.1460,0.9956,0.4937,0.6597,0.0005,0.9253,0.2202,0.6782,0.1548,0.3403,0.1001,0.2407,0.7329,0.3159,0.8931,0.7524,0.3794,0.5269,0.3208,0.8257,0.0347,0.4897,0.9185,0.1880,0.4058,0.1206,0.5903,0.9321,0.0327,0.4019,0.9517,0.2603,0.6323,0.0542,0.3569,0.8882,0.4487,0.5532,0.0825,0.7778,0.5728,0.8140,0.6177,0.4858,0.9536,0.0376,0.5542,0.2485,0.0854,0.9604,0.1616,0.6636,0.2271,0.7446,0.0806,0.7944,0.5171,0.8286,0.3198,0.4536,0.8110,0.6196,0.0776,0.5142,0.4175,0.7397,0.2222,0.1353,0.7212,0.2847,0.9712,0.4253,0.2632,0.0337,0.9214,0.1665,0.6519,0.4185,0.8384,0.6753,0.4604,0.7710,0.5737,0.4263,0.9468,0.3384,0.6021,0.2720,0.9888,0.6577,0.0903,0.7163,0.1792,0.2935,0.8823,0.1626,0.8022,0.9370,0.5894,0.8325,0.3765,0.6382,0.1216,0.5249,0.8667,0.6978,0.3999,0.3003,0.7935,0.1050,0.3540,0.1763,0.9087,0.0132,0.2642,0.8530,0.0913,0.4683,0.8872,0.1499,0.0454,0.4409,0.2290,0.9575,0.5708,0.7632,0.3833,0.6890,0.3169,0.0200,0.2729,0.5181,0.0659,0.8989,0.7593,0.2017,0.3628,0.0972,0.5610,0.8765,0.2231,0.5308,0.9692,0.6030,0.3120,0.7202,0.3745,0.6392,0.2026,0.7847,0.6851,0.3774,0.7358,0.8540,0.5288,0.3530,0.0562,0.4839,0.1118,0.9194,0.5513,0.4390,0.6675,0.9819,0.1860,0.4829,0.3101,0.5972,0.9409,0.7827,0.4517,0.0063,0.6841,0.7573,0.4546,0.0708,0.8306,0.4985,0.1235,0.9829,0.5503,0.0220,0.2368,0.5835,0.2983,0.1606,0.6343,0.9077,0.6831,0.8354,0.2505,0.6362,0.2046,0.8638,0.1294,0.7251,0.4077,0.8091,0.0171,0.7114,0.1313,0.2476,0.6284,0.9868,0.3481,0.1401,0.2808,0.8901,0.2163,0.6606,0.7603,0.4429,0.3179,0.8452,0.4956,0.9155,0.7866,0.4204,0.0073,0.2827,0.1831,0.4038,0.9907,0.4722,0.0786,0.7788,0.3354,0.5649,0.2573,0.6411,0.9614,0.4399,0.5386,0.3315,0.8296,0.1870,0.5122,0.9233,0.6440,0.4116,0.5640,0.0308,0.2593,0.9009,0.1577,0.7065,0.3647,0.0757,0.5562,0.9761,0.7134,0.5151,0.8013,0.5767,0.0288,0.7173,0.2788,0.5112,0.9507,0.0474,0.8862,0.1138,0.3501,0.2085,0.8950,0.7349,0.0815,0.4097,0.5854,0.0405,0.8130,0.1177,0.7759,0.9673,0.3862,0.5815,0.0552,0.6226,0.9458,0.1919,0.6567,0.1274,0.3667,0.8960,0.1099,0.3140,0.7700,0.3677,0.9058,0.6733,0.1772,0.3931,0.7515,0.4907,0.8560,0.6128,0.0444,0.4624,0.6704,0.9067,0.2388,0.7241,0.3560,0.4849,0.2974,0.1821,0.7192,0.8628,0.4868,0.7671,0.2681,0.4653,0.3267,0.8374,0.2124,0.4565,0.6646,0.9390,0.1694,0.6108,0.1079,0.4438,0.8364,0.6313,0.2310,0.5796,0.1519,0.7886,0.2749,0.9634,0.1440,0.3188,0.6353,0.8657,0.1714,0.9487,0.6802,0.5327,0.0796,0.3218,0.1958,0.3960,0.0942,0.8892,0.0317,0.5698,0.7534,0.0698,0.2554,0.5200,0.4126,0.8218,0.2397,0.5620,0.0044,0.2993,0.9966,0.0591,0.4360,0.6938,0.3813,0.5571,0.8247,0.4995,0.0894,0.4302,0.5483,0.0161,0.8433,0.4028,0.9331,0.6450,0.7974,0.9976,0.5132,0.6997,0.4312,0.2778,0.9702,0.6079,0.8550,0.7378,0.0503,0.9731,0.3433,0.7622,0.9136,0.4702,0.6792,0.8228,0.3228,0.9399,0.1978,0.0239,0.7505,0.2153,0.9927,0.7729,0.2886,0.6274,0.2329,0.1323,0.4663,0.2583,0.0024,0.5786,0.1470,0.8169,0.9165,0.1753,0.4927,0.3726,0.1479,0.3091,0.6714,0.4761,0.1382,0.6987,0.0884,0.3716,0.1655,0.5366,0.1226,0.6089,0.8735,0.4478,0.6558,0.3452,0.5981,0.0581,0.9019,0.3823,0.7085,0.7837,0.5591,0.8833,0.7388,0.3599,0.2319,0.6118,0.0874,0.7153,0.8032,0.0122,0.9302,0.5747,0.2104,0.8804,0.6040,0.2690,0.5161,0.7808,0.9546,0.2817,0.7407,0.4946,0.0767,0.2651,0.9341,0.1245,0.4136,0.6929,0.1851,0.4888,0.9644,0.0483,0.3394,0.1743,0.4370,0.9419,0.6880,0.3149,0.4106,0.5415,0.3286,0.6489,0.4468,0.7749,0.3911,0.0298,0.8120,0.4292,0.8999,0.2134,0.5874,0.0181,0.8501,0.3872,0.7095,0.7983,0.5093,0.8579,0.2456,0.5356,0.8052,0.1069,0.3042,0.5933,0.8208,0.6587,0.1147,0.5024,0.0435,0.8706,0.2251,0.9800,0.1587,0.8853,0.2534,0.1060,0.9897,0.5376,0.1802,0.6431,0.0649,0.7046,0.3345,0.4644,0.9272,0.2056,0.3306,0.1411,0.6255,0.0054,0.7231,0.9595,0.3472,0.6528,0.8745,0.2192,0.5073,0.9839,0.2925,0.8315,0.5688,0.7661,0.4780,0.6665,0.0464,0.5825,0.7300,0.4976,0.2944,0.7124,0.3491,0.9360,0.4009,0.1450,0.8179,0.6206,0.1167,0.6772,0.5601,0.9810,0.3979,0.3022,0.4712,0.1704,0.0425,0.4419,0.7495,0.1343,0.3950,0.0229,0.7075,0.2036,0.3638,0.1196,0.7261,0.3071,0.8442,0.3843,0.1899,0.8237,0.6333,0.0747,0.8462,0.2544,0.7427,0.5493,0.9878,0.2339,0.4155,0.7905,0.0640,0.8413,0.1938,0.7612,0.8911,0.6001,0.8188,0.5444,0.2700,0.9175,0.6069,0.7954,0.4458,0.8921,0.6216,0.9438,0.4243,0.2075,0.5278,0.9624,0.0669,0.4214,0.9312,0.1567,0.4790,0.5962,0.0249,0.4595,0.3081,0.0513,0.9106,0.5210,0.2710,0.4585,0.6538,0.5239,0.0962,0.2524,0.3696,0.9497,0.0728,0.6919,0.3276,0.0981,0.5298,0.1538,0.2876,0.0103,0.8843,0.7817,0.1011,0.6167,0.7485,0.2358,0.5718,0.3706,0.7856,0.9683,0.2095,0.8813,0.7769,0.6509,0.3521,0.7310,0.1362,0.9351,0.0366,0.3413,0.9741,0.6372,0.7319,0.1968,0.5044,0.4321,0.8608,0.2300,0.9585,0.6860,0.8149,0.5776,0.1685,0.6694,0.3579,0.2739,0.4819,0.8647,0.0034,0.7017,0.2671,0.1128,0.6304,0.3921,0.1265,0.4917,0.1890,0.8569,0.6060,0.3882,0.6899,0.8101,0.1528,0.4526,0.0142,0.8335,0.6655,0.1431,0.7417,0.5757,0.3970,0.0737,0.4810,0.3374,0.0620,0.5034,0.9380,0.8062,0.1421,0.6616,0.3247,0.8970,0.4351,0.5337,0.8599,0.2856,0.7290,0.9565,0.5679,0.0093,0.2905,0.7690,0.2212,0.5474,0.2866,0.8716,0.5845,0.3462,0.2563,0.9937,0.0493,0.2964,0.9038,0.1909,0.7583,0.9858,0.7183,0.2173,0.5864,0.0396,0.4507,0.9946,0.5220,0.1812,0.7554,0.0356,0.6821,0.4741,0.0571,0.2427,0.6909,0.4224,0.9995,0.4771,0.0835,0.9292,0.4067,0.7563,0.1284,0.9204,0.5347,0.4165,0.6157,0.7925,0.5083,0.6401,0.2759,0.4282,0.9116,0.3130,0.8726,0.3892,0.7681,0.2280,0.0933,0.6235,0.9448,0.3550,0.1646,0.9243,0.7896,0.3804,0.8794,0.0952,0.5923,0.1782,0.8491,0.6147,0.0386,0.5063,0.2241,0.6812,0.0845,0.8521,0.1733,0.3784,0.0278,0.8618,0.1255,0.5464,0.0151,0.6470,0.1558,0.6958,0.2915,0.5806,0.8345,0.4048,0.2446,0.8198,0.5952,0.3013,0.5522,0.1509,0.5103,0.3296,0.8159,0.7271,0.3735,0.2417,0.7007,0.9790,0.3687,0.7964,0.4575,0.3032,0.7222,0.9653,0.2349,0.6968,0.3618,0.7876,0.4878,0.4087,0.8276,0.0864,0.4800,0.9146,0.0190,0.7280,0.5054,0.1021,0.4497,0.7437,0.0718,0.9526,0.8403,0.6548,0.2661,0.1157,0.5259,0.8979,0.3237,0.1636,0.5913,0.0259,0.9126,0.6460,0.1108,0.5630,0.4634,0.9282,0.6011,0.1997,0.9780,0.2622,0.5435,0.9478,0.1841,0.6626,0.3511,0.1597,0.9751,0.6499,0.8696,0.2144,0.6294,0.4341,0.1987,0.0210,0.4614,0.9663,0.6743,0.0610,0.4673,0.8423,0.7339,0.2798,0.5317,0.2114,0.3989,0.8071,0.0679,0.2896,0.1040,0.8472,0.7036,0.0688,0.7720,0.3257,0.7368,0.4146,0.8687,0.5405,0.2769,0.3364,0.0269,0.3755,0.7798,0.2837,0.7056,0.5581,0.7739,0.3901,0.2065,0.8042,0.6265,0.0991,0.4233,0.8677,0.1333,0.9429,0.7466,0.3325,0.8940,0.6724,0.5229,0.3442,0.6138,0.2183,0.4556,0.5942,0.0415,0.2378,0.6245,0.0630,0.8003,0.6870,0.9028,0.5190,0.9722,0.1089,0.8755,0.3335,0.9097,0.1304,0.5396,0.3062,0.9263,0.2261,0.5659,0.3423,0.6763,0.5005,0.0015,0.6050,0.1675,0.4448,0.7651,0.1489,0.4194,0.8081,0.8774,0.1392,0.9849,0.7915,0.4692,0.9224,0.2007,0.4272,0.0923,0.5991,0.1724,0.4731,0.6099,0.0532,0.2466,0.6479,0.7544,0.0112,0.3940,0.7026,0.9771,0.0522,0.7993,0.2612,0.4331,0.9985,0.2437,0.8511,0.0601,0.9556);
+
+vec3 toS(vec3 c){return pow(c,vec3(1.0/2.2));}
+vec3 toL(vec3 c){return pow(c,vec3(2.2));}
+vec3 hl(vec3 b,vec3 bl){return mix(2.0*b*bl,1.0-2.0*(1.0-b)*(1.0-bl),step(0.5,bl));}
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float n1d(float t,float pd){float i=floor(t),f=fract(t);f=f*f*(3.0-2.0*f);return mix(hash(vec2(mod(i,pd),0.0)),hash(vec2(mod(i+1.0,pd),0.0)),f);}
+float bsn(vec2 p){float a=atan(p.y,p.x)+3.14159;float t=a/TAU;return(0.65*n1d(t*12.0+seed,12.0)+0.35*n1d(t*23.0+seed*3.7,23.0)-0.45)*4.0;}
+float bbn(vec2 p){float a=atan(p.y,p.x)+3.14159;return 0.75+0.5*n1d(a/TAU*4.0+3.1,4.0);}
+
+vec3 blurS(vec2 c){
+    vec2 ts=1.0/resolution;
+    const vec2 d[16]=vec2[16](vec2(-0.1252,0.0698),vec2(0.2079,-0.1567),vec2(-0.0583,0.2918),vec2(-0.3108,-0.0927),vec2(0.3781,0.1473),vec2(-0.2104,-0.3562),vec2(0.0415,0.4691),vec2(0.4287,-0.2835),vec2(-0.4953,0.1812),vec2(0.2346,0.5108),vec2(-0.5621,-0.2249),vec2(0.5894,0.0637),vec2(-0.3467,0.5583),vec2(0.1178,-0.6415),vec2(0.6752,-0.3091),vec2(-0.6138,0.4826));
+    float a=hash(gl_FragCoord.xy)*TAU,cs2=cos(a),sn=sin(a);mat2 rot=mat2(cs2,sn,-sn,cs2);
+    vec3 sum=vec3(0);float tw=0.0;
+    for(int i=0;i<16;i++){vec4 s=texture(inputBuffer,c+rot*d[i]*blurRadius*ts);float sl=dot(s.rgb,vec3(0.299,0.587,0.114));if(sl>0.4)s.rgb=mix(s.rgb,highlightColor*s.rgb,smoothstep(0.4,1.0,sl)*0.89);float dd=length(d[i]),w=exp(-dd*dd*3.125)*s.a;sum+=s.rgb*w;tw+=w;}
+    return tw>0.0?sum/tw:vec3(0);
+}
+float dotC(vec2 px,float l,float fo){
+    l=pow(min(l/0.8,1.0),2.0);vec2 cl=floor(px/dotSpacing);
+    int idx=int(mod(cl.y,32.0))*32+int(mod(cl.x,32.0));
+    vec2 dc=(cl+hash(cl+vec2(13.37,5.71)))*dotSpacing;
+    float dm=step(bn[idx],(1.0-l)*(1.0-fo)),sc=0.5+0.5*hash(cl+vec2(43.37,2.31));
+    return dm*smoothstep(dotRadius*sc+0.01,dotRadius*sc-0.01,length(px-dc)/dotSpacing);
+}
+void main(){
+    vec2 uv=gl_FragCoord.xy/resolution;vec4 ic=texture(inputBuffer,uv);
+    vec3 bl=blurS(uv);float bll=dot(bl,vec3(0.299,0.587,0.114));
+    float bp=ceil(borderBlurFade-borderBlurInset)+2.0;
+    vec2 tl=vec2(bp),br=resolution-vec2(bp),cc=(tl+br)*0.5,hs=(br-tl)*0.5;
+    vec2 cn=sign(gl_FragCoord.xy-cc);float cr=10.0+10.0*hash(vec2(cn.x*3.0+cn.y*7.0,seed));
+    vec2 ed=abs(gl_FragCoord.xy-cc)-hs+cr;
+    float rd=length(max(ed,0.0))+min(max(ed.x,ed.y),0.0)-cr+bsn(gl_FragCoord.xy-cc);
+    float mf=max(borderRisoFade,borderBlurFade+borderBlurInset)*1.25,dfo=0.0,bfo=1.0;
+    if(-rd<mf){float fa=bbn(gl_FragCoord.xy-cc);dfo=1.0-smoothstep(0.0,borderRisoFade*fa,-rd);bfo=smoothstep(borderBlurInset*fa-borderBlurFade*fa,borderBlurInset*fa,-rd);}
+    if(ic.a<0.001){outColor=vec4(mix(toL(bgColor),bl,bfo),1.0);return;}
+    float cov=dotC(gl_FragCoord.xy,bll,dfo);vec3 riso=mix(vec3(1),color,cov);
+    vec3 blnd=hl(toS(bl),toS(riso)),comp=toL(mix(blnd,toS(bl),blurAmount));
+    comp=mix(mix(bgColor,comp,bfo),comp,cov);
+    outColor=vec4(comp,1.0);
+}
+`;
+
+function mkS(t,s){const sh=gl.createShader(t);gl.shaderSource(sh,s);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(sh));return sh;}
+function mkP(v,f){const p=gl.createProgram();gl.attachShader(p,mkS(gl.VERTEX_SHADER,v));gl.attachShader(p,mkS(gl.FRAGMENT_SHADER,f));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))console.error(gl.getProgramInfoLog(p));return p;}
+
+const oP=mkP(quadVert,oceanFrag),sP=mkP(quadVert,sparkleMaskFrag),cP=mkP(quadVert,compositeFrag),rP=mkP(quadVert,risoFrag);
+const quad=new Float32Array([-1,-1,1,-1,-1,1,1,1]),vbo=gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER,vbo);gl.bufferData(gl.ARRAY_BUFFER,quad,gl.STATIC_DRAW);
+function bQ(p){const a=gl.getAttribLocation(p,'aPos');gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);}
+
+const nSz=256,nD=new Uint8Array(nSz*nSz);for(let i=0;i<nD.length;i++)nD[i]=Math.random()*255|0;
+const nT=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,nT);
+gl.texImage2D(gl.TEXTURE_2D,0,gl.R8,nSz,nSz,0,gl.RED,gl.UNSIGNED_BYTE,nD);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.REPEAT);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.REPEAT);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+
+function mkFBO(w,h){const f=gl.createFramebuffer(),t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.bindFramebuffer(gl.FRAMEBUFFER,f);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,t,0);gl.bindFramebuffer(gl.FRAMEBUFFER,null);return{fbo:f,tex:t};}
+
+const W=canvas.width,H=canvas.height;
+const oFBO=mkFBO(W,H),mA=mkFBO(W,H),mB=mkFBO(W,H),rFBO=mkFBO(W,H);let mSwap=false;
+
+function sub3(a,b){return[a[0]-b[0],a[1]-b[1],a[2]-b[2]];}
+function cross3(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
+function dot3(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
+function norm3(v){const l=Math.sqrt(dot3(v,v));return[v[0]/l,v[1]/l,v[2]/l];}
+function persp(fov,asp,n,f){const ff=1/Math.tan(fov*Math.PI/360),nf=1/(n-f);return new Float32Array([ff/asp,0,0,0,0,ff,0,0,0,0,(f+n)*nf,-1,0,0,2*f*n*nf,0]);}
+function lookAt(e,t,u){const z=norm3(sub3(e,t)),x=norm3(cross3(u,z)),y=cross3(z,x);return new Float32Array([x[0],y[0],z[0],0,x[1],y[1],z[1],0,x[2],y[2],z[2],0,-dot3(x,e),-dot3(y,e),-dot3(z,e),1]);}
+function inv4(m){const inv=new Float32Array(16),m00=m[0],m01=m[1],m02=m[2],m03=m[3],m10=m[4],m11=m[5],m12=m[6],m13=m[7],m20=m[8],m21=m[9],m22=m[10],m23=m[11],m30=m[12],m31=m[13],m32=m[14],m33=m[15],b00=m00*m11-m01*m10,b01=m00*m12-m02*m10,b02=m00*m13-m03*m10,b03=m01*m12-m02*m11,b04=m01*m13-m03*m11,b05=m02*m13-m03*m12,b06=m20*m31-m21*m30,b07=m20*m32-m22*m30,b08=m20*m33-m23*m30,b09=m21*m32-m22*m31,b10=m21*m33-m23*m31,b11=m22*m33-m23*m32;let d=b00*b11-b01*b10+b02*b09+b03*b08-b04*b07+b05*b06;if(!d)return inv;d=1/d;inv[0]=(m11*b11-m12*b10+m13*b09)*d;inv[1]=(m02*b10-m01*b11-m03*b09)*d;inv[2]=(m31*b05-m32*b04+m33*b03)*d;inv[3]=(m22*b04-m21*b05-m23*b03)*d;inv[4]=(m12*b08-m10*b11-m13*b07)*d;inv[5]=(m00*b11-m02*b08+m03*b07)*d;inv[6]=(m32*b02-m30*b05-m33*b01)*d;inv[7]=(m20*b05-m22*b02+m23*b01)*d;inv[8]=(m10*b10-m11*b08+m13*b06)*d;inv[9]=(m01*b08-m00*b10-m03*b06)*d;inv[10]=(m30*b04-m31*b02+m33*b00)*d;inv[11]=(m21*b02-m20*b04-m23*b00)*d;inv[12]=(m11*b07-m10*b09-m12*b06)*d;inv[13]=(m00*b09-m01*b07+m02*b06)*d;inv[14]=(m31*b01-m30*b03-m32*b00)*d;inv[15]=(m20*b03-m21*b01+m22*b00)*d;return inv;}
+
+const asp=CW/CH;
+const pM=persp(CONFIG.fov,asp,0.1,1000),vM=lookAt(CONFIG.cameraPos,CONFIG.lookAt,[0,1,0]);
+const pI=inv4(pM),vI=inv4(vM);
+const sD=norm3([Math.cos(CONFIG.sunElevation)*Math.sin(CONFIG.sunAzimuth),Math.sin(CONFIG.sunElevation),Math.cos(CONFIG.sunElevation)*Math.cos(CONFIG.sunAzimuth)]);
+
+gl.useProgram(oP);bQ(oP);const oL=n=>gl.getUniformLocation(oP,n);
+gl.uniform2f(oL('uResolution'),W,H);gl.uniform3fv(oL('uCameraPos'),CONFIG.cameraPos);
+gl.uniformMatrix4fv(oL('uProjectionMatrixInverse'),false,pI);gl.uniformMatrix4fv(oL('uViewMatrixInverse'),false,vI);
+gl.uniform1f(oL('uWaveHeight'),CONFIG.waveHeight);gl.uniform1f(oL('uWaveScale'),CONFIG.waveScale);
+gl.uniform1f(oL('uWaveSpeed'),CONFIG.waveSpeed);gl.uniform3fv(oL('uSunDirection'),sD);
+gl.uniform3fv(oL('uSurfaceColor'),CONFIG.surfaceColor);gl.uniform3fv(oL('uScatterColor'),CONFIG.scatterColor);
+gl.uniform1f(oL('uOceanRadius'),CONFIG.oceanRadius);gl.uniform3fv(oL('uSunColor'),CONFIG.sunColor);
+gl.uniform1f(oL('uSunStrength'),CONFIG.sunStrength);gl.uniform3fv(oL('uDepthColor'),CONFIG.depthColor);
+
+gl.useProgram(sP);bQ(sP);const sL=n=>gl.getUniformLocation(sP,n);
+gl.uniform2f(sL('resolution'),W,H);gl.uniform1f(sL('fadeOut'),SPARKLE_CONFIG.fadeOut);
+gl.uniform1f(sL('fadeIn'),SPARKLE_CONFIG.fadeIn);gl.uniform1f(sL('maxShowDuration'),SPARKLE_CONFIG.maxShowDuration);
+gl.uniform1f(sL('hideDuration'),SPARKLE_CONFIG.hideDuration);
+gl.uniform2f(sL('contentPadding'),5/W,5/H);gl.uniform1f(sL('seed'),Math.random());
+
+gl.useProgram(cP);bQ(cP);const cL=n=>gl.getUniformLocation(cP,n);
+gl.uniform2f(cL('uResolution'),W,H);gl.uniform3fv(cL('coreColor'),SPARKLE_CONFIG.coreColor);
+gl.uniform3fv(cL('secondaryCoreColor'),SPARKLE_CONFIG.secondaryCoreColor);
+gl.uniform3fv(cL('coreGlowColor'),SPARKLE_CONFIG.coreGlowColor);
+gl.uniform3fv(cL('streakColor'),SPARKLE_CONFIG.streakColor);
+
+gl.useProgram(rP);bQ(rP);const rL=n=>gl.getUniformLocation(rP,n);
+gl.uniform2f(rL('resolution'),W,H);gl.uniform3fv(rL('color'),RISO_CONFIG.color);
+gl.uniform1f(rL('dotSpacing'),RISO_CONFIG.dotSpacing);gl.uniform1f(rL('dotRadius'),RISO_CONFIG.dotRadius);
+gl.uniform1f(rL('blurRadius'),RISO_CONFIG.blurRadius*(H/1080));
+gl.uniform1f(rL('blurAmount'),RISO_CONFIG.blurAmount);gl.uniform3fv(rL('highlightColor'),RISO_CONFIG.highlightColor);
+gl.uniform3fv(rL('bgColor'),RISO_CONFIG.bgColor);gl.uniform1f(rL('borderRisoFade'),RISO_CONFIG.borderRisoFade);
+gl.uniform1f(rL('borderBlurFade'),RISO_CONFIG.borderBlurFade);gl.uniform1f(rL('borderBlurInset'),RISO_CONFIG.borderBlurInset);
+gl.uniform1f(rL('seed'),Math.random());
+
+const t0=performance.now();
+const oTime=gl.getUniformLocation(oP,'uTime'),sTime=gl.getUniformLocation(sP,'time');
+
+function frame(){
+  const t=(performance.now()-t0)*0.001;
+  gl.useProgram(oP);gl.bindFramebuffer(gl.FRAMEBUFFER,oFBO.fbo);gl.viewport(0,0,W,H);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,nT);gl.uniform1i(oL('uNoiseTexture'),0);gl.uniform1f(oTime,t);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+
+  const rM=mSwap?mB:mA,wM=mSwap?mA:mB;
+  gl.useProgram(sP);gl.bindFramebuffer(gl.FRAMEBUFFER,wM.fbo);gl.viewport(0,0,W,H);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,oFBO.tex);gl.uniform1i(sL('inputBuffer'),0);
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,rM.tex);gl.uniform1i(sL('prevBuffer'),1);
+  gl.uniform1f(sTime,t);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);mSwap=!mSwap;
+
+  gl.useProgram(rP);gl.bindFramebuffer(gl.FRAMEBUFFER,rFBO.fbo);gl.viewport(0,0,W,H);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,oFBO.tex);gl.uniform1i(rL('inputBuffer'),0);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+
+  gl.useProgram(cP);gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,W,H);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,rFBO.tex);gl.uniform1i(cL('inputBuffer'),0);
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,wM.tex);gl.uniform1i(cL('sparkleMask'),1);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>
