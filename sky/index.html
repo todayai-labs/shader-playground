@@ -60,6 +60,9 @@
     border-top: 1px solid #f0f0f0;
   }
   .panel h3:first-child { border-top: none; margin-top: 0; padding-top: 0; }
+  .section-head { display: flex; align-items: center; gap: 6px; }
+  .section-head input[type="checkbox"] { accent-color: #666; margin: 0; cursor: pointer; }
+  .section-body.disabled { opacity: 0.3; pointer-events: none; }
   .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
   .row label { width: 90px; flex-shrink: 0; color: #666; }
   .row input[type="range"] { flex: 1; height: 4px; accent-color: #666; }
@@ -127,6 +130,7 @@ const DEFAULTS = {
   cloudSpeed:    0.008,
   cloudOpacity:  0.45,
 
+  risoEnabled:   true,
   risoColor:     '#4D7A8C',
   dotSpacing:    1.0,
   dotRadius:     0.5,
@@ -134,6 +138,7 @@ const DEFAULTS = {
   blurAmount:    0.7,
   highlightColor:'#BFC8D1',
 
+  borderEnabled:   true,
   borderRisoFade:  15,
   borderBlurFade:  15,
   borderBlurInset: 12,
@@ -169,7 +174,7 @@ const defs = [
   { key: 'cloudSpeed',    label: 'Speed',    type: 'range', min: 0, max: 0.03, step: 0.001 },
   { key: 'cloudOpacity',  label: 'Opacity',  type: 'range', min: 0, max: 1, step: 0.01 },
 
-  { section: 'Riso Halftone' },
+  { section: 'Riso Halftone', toggle: 'risoEnabled' },
   { key: 'risoColor',      label: 'Dot color',   type: 'color' },
   { key: 'dotSpacing',     label: 'Dot spacing',  type: 'range', min: 0.5, max: 3, step: 0.1 },
   { key: 'dotRadius',      label: 'Dot radius',   type: 'range', min: 0.1, max: 1.5, step: 0.05 },
@@ -177,7 +182,7 @@ const defs = [
   { key: 'blurAmount',     label: 'Blur amount',  type: 'range', min: 0, max: 1, step: 0.05 },
   { key: 'highlightColor', label: 'Highlight',    type: 'color' },
 
-  { section: 'Organic Border' },
+  { section: 'Organic Border', toggle: 'borderEnabled' },
   { key: 'borderRisoFade',  label: 'Riso fade',  type: 'range', min: 0, max: 40, step: 1 },
   { key: 'borderBlurFade',  label: 'Blur fade',  type: 'range', min: 0, max: 40, step: 1 },
   { key: 'borderBlurInset', label: 'Blur inset', type: 'range', min: 0, max: 30, step: 1 },
@@ -188,14 +193,43 @@ const defs = [
 
 const panel = document.getElementById('panel');
 const inputs = {};
+let currentBody = null;
 
 defs.forEach(d => {
   if (d.section) {
     const h = document.createElement('h3');
-    h.textContent = d.section;
-    panel.appendChild(h);
+    if (d.toggle) {
+      const wrap = document.createElement('div');
+      wrap.className = 'section-head';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = cfg[d.toggle];
+      const label = document.createTextNode(d.section);
+      wrap.appendChild(cb);
+      wrap.appendChild(label);
+      h.appendChild(wrap);
+
+      const body = document.createElement('div');
+      body.className = 'section-body' + (cfg[d.toggle] ? '' : ' disabled');
+      currentBody = body;
+
+      cb.addEventListener('change', () => {
+        cfg[d.toggle] = cb.checked;
+        body.classList.toggle('disabled', !cb.checked);
+        applyConfig();
+      });
+      inputs[d.toggle] = cb;
+
+      panel.appendChild(h);
+      panel.appendChild(body);
+    } else {
+      h.textContent = d.section;
+      panel.appendChild(h);
+      currentBody = null;
+    }
     return;
   }
+
   const row = document.createElement('div');
   row.className = 'row';
   const lbl = document.createElement('label');
@@ -226,7 +260,7 @@ defs.forEach(d => {
     row.appendChild(inp);
   }
   inputs[d.key] = inp;
-  panel.appendChild(row);
+  (currentBody || panel).appendChild(row);
 });
 
 const actions = document.createElement('div');
@@ -247,10 +281,19 @@ btnReset.onclick = () => {
   defs.forEach(d => {
     if (!d.key) return;
     const inp = inputs[d.key];
+    if (!inp) return;
     inp.value = cfg[d.key];
     const val = inp.parentElement.querySelector('.val');
     if (val) val.textContent = Number(cfg[d.key]).toFixed(2);
   });
+  if (inputs.risoEnabled) {
+    inputs.risoEnabled.checked = cfg.risoEnabled;
+    inputs.risoEnabled.dispatchEvent(new Event('change'));
+  }
+  if (inputs.borderEnabled) {
+    inputs.borderEnabled.checked = cfg.borderEnabled;
+    inputs.borderEnabled.dispatchEvent(new Event('change'));
+  }
   applyConfig();
   showToast('Reset to defaults');
 };
@@ -427,15 +470,28 @@ function applyConfig() {
   gl.uniform1f(skL('uCloudOpacity'), cfg.cloudOpacity);
 
   gl.useProgram(risoP);
-  gl.uniform3fv(rL('color'), hexToRgb(cfg.risoColor));
-  gl.uniform1f(rL('dotSpacing'), cfg.dotSpacing);
-  gl.uniform1f(rL('dotRadius'), cfg.dotRadius);
-  gl.uniform1f(rL('blurRadius'), cfg.blurRadius * (H / 1080));
-  gl.uniform1f(rL('blurAmount'), cfg.blurAmount);
-  gl.uniform3fv(rL('highlightColor'), hexToRgb(cfg.highlightColor));
-  gl.uniform1f(rL('borderRisoFade'), cfg.borderRisoFade);
-  gl.uniform1f(rL('borderBlurFade'), cfg.borderBlurFade);
-  gl.uniform1f(rL('borderBlurInset'), cfg.borderBlurInset);
+  if (cfg.risoEnabled) {
+    gl.uniform3fv(rL('color'), hexToRgb(cfg.risoColor));
+    gl.uniform1f(rL('dotSpacing'), cfg.dotSpacing);
+    gl.uniform1f(rL('dotRadius'), cfg.dotRadius);
+    gl.uniform1f(rL('blurRadius'), cfg.blurRadius * (H / 1080));
+    gl.uniform1f(rL('blurAmount'), cfg.blurAmount);
+    gl.uniform3fv(rL('highlightColor'), hexToRgb(cfg.highlightColor));
+  } else {
+    gl.uniform1f(rL('dotRadius'), 0.0);
+    gl.uniform1f(rL('blurRadius'), 0.0);
+    gl.uniform1f(rL('blurAmount'), 1.0);
+  }
+
+  if (cfg.borderEnabled) {
+    gl.uniform1f(rL('borderRisoFade'), cfg.borderRisoFade);
+    gl.uniform1f(rL('borderBlurFade'), cfg.borderBlurFade);
+    gl.uniform1f(rL('borderBlurInset'), cfg.borderBlurInset);
+  } else {
+    gl.uniform1f(rL('borderRisoFade'), 0.0);
+    gl.uniform1f(rL('borderBlurFade'), 0.0);
+    gl.uniform1f(rL('borderBlurInset'), 0.0);
+  }
 
   document.getElementById('paper').style.opacity = cfg.overlayOpacity;
 }
