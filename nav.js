@@ -5,6 +5,7 @@
         { id: 'garden', title: 'Garden', url: '/garden/index.html' },
         { id: 'sparkles', title: 'Sparkles', url: '/sparkles/index.html' },
         { id: 'fog', title: 'Fog hover', url: '/fog/index.html' },
+        { id: 'landscape', title: 'Landscape', url: '/landscape/index.html' },
     ];
 
     const path = location.pathname;
