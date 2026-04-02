@@ -15,11 +15,33 @@
     max-width: 430px;
     overflow: hidden;
   }
-  #bg, #fg {
+  #bg {
     position: absolute; top: 0; left: 0;
     width: 100%; height: 100%;
   }
-  #fg { pointer-events: none; }
+  .fg-group {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    mask-image: linear-gradient(to top, black 0%, black 30%, transparent 52%);
+    -webkit-mask-image: linear-gradient(to top, black 0%, black 30%, transparent 52%);
+  }
+  #fg {
+    width: 100%; height: 100%;
+    display: block;
+  }
+  .grass-overlay {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    mix-blend-mode: screen;
+    background: url(../garden/textures/grass.webp) center/cover no-repeat;
+  }
+  .cover-overlay {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    mix-blend-mode: darken;
+    background: url(../garden/textures/cover.png) center/cover no-repeat;
+  }
 </style>
 <script type="importmap">
 {
@@ -33,7 +55,11 @@
 <body>
 <div class="frame">
   <canvas id="bg"></canvas>
-  <canvas id="fg"></canvas>
+  <div class="fg-group">
+    <canvas id="fg"></canvas>
+    <div class="grass-overlay" aria-hidden="true"></div>
+    <div class="cover-overlay" aria-hidden="true"></div>
+  </div>
 </div>
 
 <!-- ═══════════════════════════════════════════
@@ -42,13 +68,13 @@
 <script>
 (function() {
 const bgCanvas = document.getElementById('bg');
-const container = document.querySelector('.frame');
+const frameEl = document.querySelector('.frame');
 const dpr = Math.min(window.devicePixelRatio, 2);
 let W, H;
 
 function resizeBg() {
-  W = container.clientWidth * dpr;
-  H = container.clientHeight * dpr;
+  W = frameEl.clientWidth * dpr;
+  H = frameEl.clientHeight * dpr;
   bgCanvas.width = W;
   bgCanvas.height = H;
 }
@@ -63,7 +89,6 @@ in vec2 aPos;
 void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
 `;
 
-/* ── Pass 1: Ocean raymarching ── */
 const oceanFrag = `#version 300 es
 precision highp float;
 out vec4 outColor;
@@ -175,7 +200,6 @@ void main() {
 }
 `;
 
-/* ── Pass 2: Sparkle mask ── */
 const sparkleMaskFrag = `#version 300 es
 precision highp float;
 out vec4 outColor;
@@ -185,11 +209,8 @@ uniform float fadeOut;
 #define TAU 6.2831853
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
-
 float getLuma(vec3 c) { return dot(c, vec3(0.299,0.587,0.114)); }
-
 float sparkleThreshold(float l) { return pow(smoothstep(0.7,1.0,l),2.0)*0.4; }
-
 float baseRadius(float l, vec2 px) {
     return step(0.9,l)*20.0*2.5*mix(1.0,0.8,px.y/resolution.y);
 }
@@ -199,7 +220,7 @@ vec3 sparkleShape(vec2 px, vec2 cc, float rad, float ct) {
     vec2 tp = px - ctr;
     float pd = length(tp), pa = atan(tp.y, tp.x);
     float h1 = hash(cc+vec2(7,3));
-    float wb = 1.0+0.2*0.2*sin(pa*2.0+time*0.3+h1*TAU)+0.2*0.1*sin(pa*3.0+time*0.2);
+    float wb = 1.0+0.04*sin(pa*2.0+time*0.3+h1*TAU)+0.02*sin(pa*3.0+time*0.2);
     float feIn = smoothstep(0.0, 0.1, ct);
     float feOut = 1.0-smoothstep(0.2, 1.0, ct);
     float fe = feIn*feOut;
@@ -209,7 +230,6 @@ vec3 sparkleShape(vec2 px, vec2 cc, float rad, float ct) {
     float gd = max(length(tp)-ge,0.0);
     float glow = 0.0;
     if (gd < 20.0) glow = pow(1.0-clamp(gd/20.0,0.0,1.0),2.0)*0.65*fe;
-
     float sc = floor(mix(4.0,5.0,h1));
     float gr = 1.0-pow(1.0-clamp(ct/0.4,0.0,1.0),3.0);
     float bs = TAU/sc;
@@ -232,7 +252,6 @@ void main() {
     vec2 px = gl_FragCoord.xy, uv = px/resolution;
     vec4 cs = texture(inputBuffer, uv);
     if (cs.a < 0.01) { outColor = vec4(0); return; }
-    float luma = getLuma(cs.rgb);
     vec2 cell = floor(px/20.0);
     vec4 maxM = vec4(0);
     for (int dx = -4; dx <= 4; dx++) for (int dy = -4; dy <= 4; dy++) {
@@ -242,24 +261,20 @@ void main() {
         if (dot(tp2,tp2) > 40000.0) continue;
         float cl = getLuma(texture(inputBuffer, ctr/resolution).rgb);
         float po = hash(cc+vec2(42,13));
-        float cd2 = 1.0*mix(0.8,1.2,hash(cc+vec2(77,31)));
+        float cd2 = mix(0.8,1.2,hash(cc+vec2(77,31)));
         float lt = time+po*cd2;
         float ci = floor(lt/cd2), ct2 = mod(lt,cd2);
-        float st = hash(cc+vec2(ci*1.731,ci*2.399));
-        if (st >= sparkleThreshold(cl)) continue;
+        if (hash(cc+vec2(ci*1.731,ci*2.399)) >= sparkleThreshold(cl)) continue;
         float rad = baseRadius(cl,ctr) * mix(0.9,1.1,hash(cc+vec2(123,456)));
         if (rad < 0.5) continue;
         float sr = rad*5.0+rad*0.5; sr*=sr;
         if (dot(tp2,tp2) > sr) continue;
-        vec3 m = sparkleShape(px, cc, rad, ct2);
-        maxM.rgb = max(maxM.rgb, m);
+        maxM.rgb = max(maxM.rgb, sparkleShape(px, cc, rad, ct2));
     }
-    vec4 prev = texture(prevBuffer, uv) * fadeOut;
-    outColor = vec4(max(prev.rgb, maxM.rgb), 0.0);
+    outColor = vec4(max(texture(prevBuffer, uv).rgb * fadeOut, maxM.rgb), 0.0);
 }
 `;
 
-/* ── Pass 3: Composite sparkles ── */
 const compositeFrag = `#version 300 es
 precision highp float;
 out vec4 outColor;
@@ -278,8 +293,7 @@ void main() {
     vec3 base = inp.rgb;
     vec3 wc = mix(base, hardLight(base, vec3(1)), m.r);
     vec3 wg = mix(wc, hardLight(wc, vec3(1,0.9,0.83)), m.b*(1.0-m.r));
-    vec3 ws = mix(wg, hardLight(wg, vec3(1,0.97,0.87)), m.g);
-    outColor = vec4(ws, 1.0);
+    outColor = vec4(mix(wg, hardLight(wg, vec3(1,0.97,0.87)), m.g), 1.0);
 }
 `;
 
@@ -384,36 +398,54 @@ window.__bgFrame = function bgFrame() {
 </script>
 
 <!-- ═══════════════════════════════════════════
-     FOREGROUND: Three.js garden (transparent sky)
+     FOREGROUND: Three.js garden with full post-processing
      ═══════════════════════════════════════════ -->
 <script type="module">
 import * as THREE from 'three';
 import { createTree, TREE_CONFIGS } from '../garden/js/tree.js';
 import { windUniforms, updateWind } from '../garden/js/wind.js';
+import { createPostProcessing } from '../garden/js/postprocessing.js';
+
+// PCSS soft shadows (copied from garden/js/main.js)
+(function installPCSS() {
+    const pcss = `
+#define PENUMBRA_FILTER_SIZE float(15)
+vec3 pcssRandRGB(vec2 uv){return vec3(fract(sin(dot(uv,vec2(12.75613,38.12123)))*13234.76575),fract(sin(dot(uv,vec2(19.45531,58.46547)))*43678.23431),fract(sin(dot(uv,vec2(23.67817,78.23121)))*93567.23423));}
+vec3 pcssLowPass(vec2 uv){vec3 r=vec3(0);for(int dx=-1;dx<=1;dx++)for(int dy=-1;dy<=1;dy++)r+=pcssRandRGB(uv+vec2(float(dx),float(dy)));return r*0.111111111;}
+vec3 pcssHighPass(vec2 uv){return pcssRandRGB(uv)-pcssLowPass(uv)+0.5;}
+vec2 pcssVogelDisk(int idx,int cnt,float ang){float r=sqrt(float(idx)+0.5)/sqrt(float(cnt));float th=float(idx)*2.399963+ang;return vec2(cos(th),sin(th))*r;}
+float pcssFindBlocker(sampler2D sm,vec2 uv,float cmp,float ang){float tx=1.0/float(textureSize(sm,0).x);float bds=0.0;float bc=0.0;for(int i=0;i<30;i++){vec2 o=(pcssVogelDisk(i,30,ang)*tx)*2.0*PENUMBRA_FILTER_SIZE;float d=unpackRGBAToDepth(texture2D(sm,uv+o));if(d<cmp){bds+=d;bc++;}}if(bc>0.0)return bds/bc;return -1.0;}
+float pcssVogelFilter(sampler2D sm,vec2 uv,float zr,float fr,float ang){float tx=1.0/float(textureSize(sm,0).x);float sh=0.0;for(int i=0;i<30;i++){vec2 vs=pcssVogelDisk(i,30,ang)*tx;vec2 vo=vs*(1.0+fr*15.0);sh+=step(zr,unpackRGBAToDepth(texture2D(sm,uv+vo)));}return sh/30.0;}
+float PCSS(sampler2D shadowMap,vec4 coords){vec2 uv=coords.xy;float zr=coords.z;float ang=pcssHighPass(gl_FragCoord.xy).r*PI2;float ab=pcssFindBlocker(shadowMap,uv,zr,ang);if(ab==-1.0)return 1.0;float pr=(zr-ab)/ab;return pcssVogelFilter(shadowMap,uv,zr,1.25*pr,ang);}
+`;
+    THREE.ShaderChunk.shadowmap_pars_fragment = THREE.ShaderChunk.shadowmap_pars_fragment
+        .replace('#ifdef USE_SHADOWMAP', '#ifdef USE_SHADOWMAP\n' + pcss)
+        .replace('#if defined( SHADOWMAP_TYPE_PCF )', '\nreturn PCSS(shadowMap, shadowCoord);\n#if defined( SHADOWMAP_TYPE_PCF )');
+})();
 
 const fgCanvas = document.getElementById('fg');
-const container = document.querySelector('.frame');
+const frameEl = document.querySelector('.frame');
 
 const renderer = new THREE.WebGLRenderer({
-  canvas: fgCanvas, antialias: true, alpha: true
+  canvas: fgCanvas, antialias: true, alpha: false
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.setSize(frameEl.clientWidth, frameEl.clientHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
-renderer.setClearColor(0x000000, 0);
 
 const scene = new THREE.Scene();
+scene.background = new THREE.Color('#E0D0B8');
 
 const camera = new THREE.PerspectiveCamera(
-  35, container.clientWidth / container.clientHeight, 0.1, 200
+  28, frameEl.clientWidth / frameEl.clientHeight, 0.1, 200
 );
-camera.position.set(0, 4, 32);
-camera.lookAt(0, 3.5, -20);
+camera.position.set(1.03, 34.83, 1.51);
+camera.lookAt(2.31, 2.46, 0.87);
 
-const dirLight = new THREE.DirectionalLight(0xF7EFD5, 8);
+const dirLight = new THREE.DirectionalLight(0xF7EFD5, 10.5);
 dirLight.position.set(-5, 42, -42);
 dirLight.castShadow = true;
 dirLight.shadow.mapSize.set(2048, 2048);
@@ -426,24 +458,23 @@ dirLight.shadow.camera.bottom = -30;
 dirLight.shadow.bias = -0.0005;
 scene.add(dirLight);
 
-const fillLight = new THREE.DirectionalLight(0xF2FDC2, 0.8);
+const fillLight = new THREE.DirectionalLight(0xF2FDC2, 1);
 fillLight.position.set(-5, 25, 28);
 scene.add(fillLight);
 
-scene.add(new THREE.AmbientLight(0xAEB983, 1.0));
+scene.add(new THREE.AmbientLight(0xAEB983, 1.2));
 
 const texLoader = new THREE.TextureLoader();
 const concreteTex = texLoader.load('../garden/textures/concrete.webp');
 concreteTex.colorSpace = THREE.SRGBColorSpace;
 concreteTex.wrapS = concreteTex.wrapT = THREE.RepeatWrapping;
 
-const groundGeo = new THREE.PlaneGeometry(60, 60);
+const groundGeo = new THREE.PlaneGeometry(40, 40);
 const groundMat = new THREE.MeshStandardMaterial({
   map: concreteTex, color: 0x51AC55
 });
 const ground = new THREE.Mesh(groundGeo, groundMat);
 ground.rotation.x = -Math.PI / 2;
-ground.position.y = -0.5;
 ground.receiveShadow = true;
 scene.add(ground);
 
@@ -459,15 +490,7 @@ for (const config of adjustedConfigs) {
   createTree(scene, config, windUniforms);
 }
 
-const grassOverlay = document.createElement('div');
-grassOverlay.style.cssText = `
-  position:absolute; bottom:0; left:0; right:0; height:100%;
-  pointer-events:none;
-  background: url(../garden/textures/grass.webp) center/cover no-repeat;
-  mix-blend-mode: screen;
-  opacity: 0.25;
-`;
-container.appendChild(grassOverlay);
+const postProcessing = createPostProcessing(renderer, scene, camera);
 
 const clock = new THREE.Clock();
 
@@ -476,15 +499,16 @@ function animate() {
   const delta = clock.getDelta();
   const elapsed = clock.getElapsedTime();
   updateWind(elapsed, delta);
-  renderer.render(scene, camera);
+  postProcessing.render();
   if (window.__bgFrame) window.__bgFrame();
 }
 
 window.addEventListener('resize', () => {
-  const w = container.clientWidth, h = container.clientHeight;
+  const w = frameEl.clientWidth, h = frameEl.clientHeight;
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
+  postProcessing.resize(w, h);
 });
 
 animate();
