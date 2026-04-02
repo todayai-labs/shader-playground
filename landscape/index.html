@@ -7,77 +7,82 @@
 <script src="../nav.js?v=2" defer></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #1a2a1a; }
-  body { display: flex; justify-content: center; align-items: center; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  body { display: flex; justify-content: center; }
   .frame {
     position: relative;
     width: 100vw; height: 100vh;
     max-width: 430px;
     overflow: hidden;
   }
-  canvas { display: block; width: 100%; height: 100%; }
+  #bg, #fg {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+  }
+  #fg { pointer-events: none; }
 </style>
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+    }
+}
+</script>
 </head>
 <body>
 <div class="frame">
-  <canvas id="c"></canvas>
+  <canvas id="bg"></canvas>
+  <canvas id="fg"></canvas>
 </div>
 
+<!-- ═══════════════════════════════════════════
+     BACKGROUND: Sparkles ocean (3-pass pipeline)
+     ═══════════════════════════════════════════ -->
 <script>
+(function() {
+const bgCanvas = document.getElementById('bg');
 const container = document.querySelector('.frame');
-const canvas = document.getElementById('c');
 const dpr = Math.min(window.devicePixelRatio, 2);
+let W, H;
 
-function resize() {
-  const w = container.clientWidth;
-  const h = container.clientHeight;
-  canvas.width = w * dpr;
-  canvas.height = h * dpr;
+function resizeBg() {
+  W = container.clientWidth * dpr;
+  H = container.clientHeight * dpr;
+  bgCanvas.width = W;
+  bgCanvas.height = H;
 }
-resize();
-window.addEventListener('resize', resize);
+resizeBg();
 
-const gl = canvas.getContext('webgl2', { alpha: false, antialias: false });
-if (!gl) { document.body.innerHTML = '<p style="color:#fff;padding:2em">WebGL2 required</p>'; throw ''; }
+const gl = bgCanvas.getContext('webgl2', { alpha: false });
+if (!gl) return;
 
-const vertSrc = `#version 300 es
+const quadVert = `#version 300 es
 precision highp float;
 in vec2 aPos;
 void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
 `;
 
-const fragSrc = `#version 300 es
+/* ── Pass 1: Ocean raymarching ── */
+const oceanFrag = `#version 300 es
 precision highp float;
 out vec4 outColor;
-
 uniform float uTime;
 uniform vec2 uResolution;
 uniform sampler2D uNoiseTexture;
 
-/* ── Noise ── */
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-
 float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
+    vec2 i = floor(p); vec2 f = fract(p);
     vec2 u = f * f * (3.0 - 2.0 * f);
-    float a = texture(uNoiseTexture, (i + vec2(0.5)) * 0.00390625).r;
+    float a = texture(uNoiseTexture, (i + vec2(0.5, 0.5)) * 0.00390625).r;
     float b = texture(uNoiseTexture, (i + vec2(1.5, 0.5)) * 0.00390625).r;
     float c = texture(uNoiseTexture, (i + vec2(0.5, 1.5)) * 0.00390625).r;
-    float d = texture(uNoiseTexture, (i + vec2(1.5)) * 0.00390625).r;
+    float d = texture(uNoiseTexture, (i + vec2(1.5, 1.5)) * 0.00390625).r;
     return a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y - 0.5;
 }
 
-float snoise(vec2 p) {
-    vec2 i = floor(p); vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i+vec2(1,0)), f.x),
-               mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
-}
-
 const float angle = 3.14;
-const float sA = sin(angle);
-const float cA = cos(angle);
+const float sA = sin(angle), cA = cos(angle);
 const mat2 octRot = mat2(cA, sA, -sA, cA);
 
 float fbm(vec3 pos, int limit) {
@@ -85,268 +90,404 @@ float fbm(vec3 pos, int limit) {
     for (int i = 0; i < 9; i++) {
         if (i >= limit) break;
         res += noise(freq * (pos.xz + uTime * (0.06 * float(9 - i + 1)))) * amp;
-        freq *= 1.75; amp *= 0.5;
-        pos.xz *= octRot;
+        freq *= 1.75; amp *= 0.5; pos.xz *= octRot;
     }
     return res;
 }
 
-float grassFbm(vec2 p) {
-    float v = 0.0, a = 0.5;
-    for (int i = 0; i < 6; i++) {
-        v += a * snoise(p);
-        p *= 2.1; a *= 0.5;
-    }
-    return v;
+const float waveHeight = 2.7, waveScale = 0.08, oceanRadius = 400.0;
+
+float oceanHeight(vec2 xz, int oct) {
+    float r = waveHeight * fbm(vec3(xz.x, 0.0, xz.y) * waveScale, oct);
+    return mix(-100.0, r, 1.0 - smoothstep(oceanRadius * 0.7, oceanRadius, length(xz)));
 }
 
-/* ── Ocean ── */
-const float waveHeight = 2.7;
-const float waveScale = 0.08;
-const float oceanRadius = 400.0;
-
-float oceanHeight(vec2 xz, int octaves) {
-    float result = waveHeight * fbm(vec3(xz.x, 0.0, xz.y) * waveScale, octaves);
-    float dist = length(xz);
-    float fade = 1.0 - smoothstep(oceanRadius * 0.7, oceanRadius, dist);
-    return mix(-100.0, result, fade);
-}
-
-/* ── Camera ── */
 const vec3 camPos = vec3(0.0, 6.0, 14.0);
 const vec3 camTarget = vec3(0.0, 2.0, -40.0);
 const vec3 sunDir = normalize(vec3(-0.5, 0.65, -0.5));
 const vec3 sunColor = vec3(1.0, 0.92, 0.82);
 
-mat3 getCameraMatrix() {
-    vec3 forward = normalize(camTarget - camPos);
-    vec3 right = normalize(cross(forward, vec3(0,1,0)));
-    vec3 up = cross(right, forward);
-    return mat3(right, up, forward);
+mat3 camMat() {
+    vec3 f = normalize(camTarget - camPos);
+    vec3 r = normalize(cross(f, vec3(0,1,0)));
+    return mat3(r, cross(r,f), f);
 }
 
-/* ── Sky ── */
-vec3 getSkyColor(vec3 rd) {
-    vec3 warmSky = vec3(0.55, 0.70, 0.85);
-    vec3 zenith = vec3(0.38, 0.55, 0.80);
-    vec3 horizon = vec3(0.78, 0.82, 0.86);
-    float t = max(rd.y, 0.0);
-    vec3 sky = mix(horizon, mix(warmSky, zenith, smoothstep(0.0, 0.6, t)), smoothstep(-0.02, 0.2, rd.y));
-    float sunDot = max(dot(rd, sunDir), 0.0);
-    sky += sunColor * pow(sunDot, 256.0) * 1.5;
-    sky += sunColor * pow(sunDot, 8.0) * 0.2;
-    float haze = exp(-t * 4.0) * 0.15;
-    sky += vec3(0.9, 0.88, 0.85) * haze;
+vec3 skyColor(vec3 rd) {
+    vec3 sky = mix(vec3(0.78,0.82,0.86),
+                   mix(vec3(0.55,0.70,0.85), vec3(0.38,0.55,0.80),
+                       smoothstep(0.0, 0.6, max(rd.y,0.0))),
+                   smoothstep(-0.02, 0.2, rd.y));
+    float sd = max(dot(rd, sunDir), 0.0);
+    sky += sunColor * pow(sd, 256.0) * 1.5 + sunColor * pow(sd, 8.0) * 0.2;
+    sky += vec3(0.9,0.88,0.85) * exp(-max(rd.y,0.0)*4.0) * 0.15;
     return sky;
 }
 
-/* ── Ocean raymarching ── */
-float approximateIntersection(vec3 ro, vec3 rd, float tLow, float tHigh) {
+float approxHit(vec3 ro, vec3 rd, float lo, float hi) {
     for (int j = 0; j < 6; j++) {
-        float tMid = 0.5 * (tLow + tHigh);
-        vec3 pm = ro + rd * tMid;
-        float hm = oceanHeight(pm.xz, 3);
-        if (pm.y - hm < 0.0) tHigh = tMid; else tLow = tMid;
+        float m = 0.5*(lo+hi); vec3 p = ro+rd*m;
+        if (p.y - oceanHeight(p.xz,3) < 0.0) hi = m; else lo = m;
     }
-    return 0.5 * (tLow + tHigh);
+    return 0.5*(lo+hi);
 }
 
-float raymarchOcean(vec3 ro, vec3 rd, out float hitDist) {
-    if (rd.y >= 0.0) { hitDist = 1e6; return 0.0; }
-    float ceiling = waveHeight * 1.1;
-    float maxDist = oceanRadius * 3.0;
-    float startDist = 0.0;
-    if (ro.y > ceiling) startDist = (ceiling - ro.y) / rd.y;
-    hitDist = startDist;
-    float stepSize = 0.0;
-    for (int i = 0; i < 24; i++) {
-        vec3 p = ro + rd * hitDist;
-        float diff = p.y - oceanHeight(p.xz, 3);
-        if (diff < 0.01) {
-            hitDist = approximateIntersection(ro, rd, hitDist - stepSize, hitDist);
-            return 1.0;
-        }
-        stepSize = max(diff * 0.5, 0.1 + hitDist * 0.01);
-        hitDist += stepSize;
-        if (hitDist > maxDist) break;
-    }
-    hitDist = 1e6;
-    return 0.0;
-}
-
-vec3 getOceanNormal(vec3 p, float hitDist) {
-    float eps = (0.05 / uResolution.y) * pow(hitDist, 1.55);
-    float dx = oceanHeight(p.xz - vec2(eps, 0.0), 7) - oceanHeight(p.xz + vec2(eps, 0.0), 7);
-    float dz = oceanHeight(p.xz - vec2(0.0, eps), 7) - oceanHeight(p.xz + vec2(0.0, eps), 7);
-    return normalize(vec3(dx, 2.0 * eps, dz));
-}
-
-vec3 shadeOcean(vec3 ro, vec3 rd, vec3 p, float hitDist) {
-    vec3 n = getOceanNormal(p, hitDist);
-    vec3 viewDir = -rd;
-    float cosTheta = max(dot(n, viewDir), 0.0);
-    float fresnel = 0.02 + 0.98 * pow(1.0 - cosTheta, 5.0);
-
-    vec3 skyRefl = getSkyColor(reflect(rd, n));
-
-    vec3 surfCol = vec3(0.18, 0.37, 0.42);
-    vec3 depthCol = vec3(0.29, 0.43, 0.53);
-    vec3 scatterCol = vec3(0.49, 0.86, 0.79);
-
-    float crest = clamp((p.y / waveHeight) + 0.5, 0.0, 1.0);
-    vec3 baseWater = mix(depthCol, surfCol, crest);
-    vec3 ambient = baseWater * 0.3;
-    float sunAlign = max(dot(n, sunDir), 0.0);
-    vec3 diffuse = baseWater * sunAlign * 0.7;
-    vec3 halfDir = normalize(sunDir + viewDir);
-    float spec = pow(max(dot(n, halfDir), 0.0), 256.0);
-    vec3 specular = sunColor * spec * 3.0;
-    vec3 backlitDir = normalize(-sunDir + n * 0.3);
-    float scatter = pow(max(dot(viewDir, backlitDir), 0.0), 4.0) * 1.1 * crest;
-    vec3 subsurface = scatterCol * scatter;
-
-    vec3 waterColor = ambient + diffuse + subsurface;
-    vec3 color = mix(waterColor, skyRefl, fresnel) + specular;
-
-    float dist = length(p.xz);
-    float fogFactor = 1.0 - exp(-dist * 0.003);
-    color = mix(color, getSkyColor(rd) * 0.95, fogFactor * 0.5);
-
-    return color;
-}
-
-/* ── Grass foreground ── */
-vec3 grassColor(vec2 uv) {
-    float grassLine = 0.28;
-    float nx = uv.x * 6.0;
-    float edgeNoise = grassFbm(vec2(nx, 0.5)) * 0.04
-                    + grassFbm(vec2(nx * 3.0, 1.5)) * 0.015;
-    float horizon = grassLine + edgeNoise;
-
-    float bladeNoise = snoise(vec2(uv.x * 80.0, uTime * 0.08)) * 0.008
-                     + snoise(vec2(uv.x * 150.0 + 50.0, uTime * 0.12)) * 0.004;
-    float bladeEdge = horizon + bladeNoise;
-
-    float alpha = smoothstep(bladeEdge + 0.008, bladeEdge - 0.003, uv.y);
-    if (alpha < 0.001) return vec3(-1.0);
-
-    float depth = clamp((horizon - uv.y) / horizon, 0.0, 1.0);
-
-    vec3 lightGrass = vec3(0.32, 0.52, 0.16);
-    vec3 midGrass = vec3(0.22, 0.40, 0.10);
-    vec3 darkGrass = vec3(0.10, 0.22, 0.05);
-
-    vec3 base = mix(lightGrass, midGrass, smoothstep(0.0, 0.4, depth));
-    base = mix(base, darkGrass, smoothstep(0.4, 1.0, depth));
-
-    float n1 = grassFbm(uv * 30.0 + uTime * 0.02) * 0.12;
-    float n2 = snoise(uv * vec2(150.0, 8.0)) * 0.06;
-    base += vec3(-n1 * 0.3, n1 + n2, -n1 * 0.2);
-
-    float blade = snoise(vec2(uv.x * 180.0, uv.y * 12.0 + uTime * 0.04));
-    float blade2 = snoise(vec2(uv.x * 60.0 + 10.0, uv.y * 40.0));
-    base *= 0.95 + blade * 0.03 + blade2 * 0.02;
-
-    float wind = sin(uv.x * 8.0 + uTime * 0.6 + depth * 3.0) * 0.03 * (1.0 - depth);
-    base *= 1.0 + wind;
-
-    float sunFace = smoothstep(0.3, 0.0, depth) * 0.1;
-    base += sunColor * sunFace;
-
-    float ao = smoothstep(0.0, 0.15, horizon - uv.y);
-    base *= 0.7 + ao * 0.3;
-
-    return mix(vec3(-1.0), base, alpha);
-}
-
-/* ── ACES tonemap ── */
-vec3 tonemap(vec3 x) {
-    float a=2.51, b=0.03, c=2.43, d=0.59, e=0.14;
-    return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0);
-}
-
-/* ── Main ── */
 void main() {
-    vec2 uv = gl_FragCoord.xy / uResolution;
-    vec3 color;
+    float fov = 50.0, asp = uResolution.x / uResolution.y;
+    float sc = tan(fov*0.5*3.14159/180.0);
+    vec2 ndc = gl_FragCoord.xy / uResolution * 2.0 - 1.0;
+    vec3 rd = camMat() * normalize(vec3(ndc.x*sc*asp, ndc.y*sc, 1.0));
+    vec3 color = skyColor(rd);
 
-    vec3 grass = grassColor(uv);
-    if (grass.r >= 0.0) {
-        color = grass;
-    } else {
-        float fov = 50.0;
-        float aspect = uResolution.x / uResolution.y;
-        float fovScale = tan(fov * 0.5 * 3.14159 / 180.0);
-        vec2 ndc = uv * 2.0 - 1.0;
-        vec3 rd = getCameraMatrix() * normalize(vec3(ndc.x * fovScale * aspect, ndc.y * fovScale, 1.0));
-
-        color = getSkyColor(rd);
-        float hitDist;
-        float hit = raymarchOcean(camPos, rd, hitDist);
-        if (hit > 0.5) {
-            vec3 p = camPos + rd * hitDist;
-            color = shadeOcean(camPos, rd, p, hitDist);
+    if (rd.y < 0.0) {
+        float ceil = waveHeight*1.1, hd = 0.0, ss = 0.0;
+        if (camPos.y > ceil) hd = (ceil - camPos.y)/rd.y;
+        for (int i = 0; i < 24; i++) {
+            vec3 p = camPos + rd*hd;
+            float df = p.y - oceanHeight(p.xz, 3);
+            if (df < 0.01) { hd = approxHit(camPos, rd, hd-ss, hd); break; }
+            ss = max(df*0.5, 0.1+hd*0.01); hd += ss;
+            if (hd > 1200.0) { hd = 1e6; break; }
         }
-        color = tonemap(color);
-        color = pow(color, vec3(1.0/2.2));
+        if (hd < 1e5) {
+            vec3 p = camPos + rd*hd;
+            float eps = (0.05/uResolution.y)*pow(hd, 1.55);
+            float dx = oceanHeight(p.xz-vec2(eps,0),7) - oceanHeight(p.xz+vec2(eps,0),7);
+            float dz = oceanHeight(p.xz-vec2(0,eps),7) - oceanHeight(p.xz+vec2(0,eps),7);
+            vec3 n = normalize(vec3(dx, 2.0*eps, dz));
+            vec3 vd = -rd;
+            float fr = 0.02 + 0.98*pow(1.0-max(dot(n,vd),0.0), 5.0);
+            vec3 refl = skyColor(reflect(rd, n));
+            float cr = clamp(p.y/waveHeight+0.5, 0.0, 1.0);
+            vec3 wc = mix(vec3(0.29,0.43,0.53), vec3(0.18,0.37,0.42), cr);
+            vec3 amb = wc*0.3, dif = wc*max(dot(n,sunDir),0.0)*0.7;
+            float sp = pow(max(dot(n, normalize(sunDir+vd)), 0.0), 256.0);
+            vec3 spec = sunColor*sp*3.0;
+            vec3 bl = normalize(-sunDir+n*0.3);
+            vec3 sss = vec3(0.49,0.86,0.79)*pow(max(dot(vd,bl),0.0),4.0)*1.1*cr;
+            color = mix(amb+dif+sss, refl, fr) + spec;
+            float fog = 1.0-exp(-length(p.xz)*0.003);
+            color = mix(color, skyColor(rd)*0.95, fog*0.5);
+        }
     }
-
-    outColor = vec4(color, 1.0);
+    color = clamp((color*(2.51*color+0.03))/(color*(2.43*color+0.59)+0.14), 0.0, 1.0);
+    outColor = vec4(pow(color, vec3(1.0/2.2)), 1.0);
 }
 `;
 
-function createShader(type, src) {
-  const s = gl.createShader(type);
-  gl.shaderSource(s, src);
-  gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
-    console.error(gl.getShaderInfoLog(s));
-  return s;
+/* ── Pass 2: Sparkle mask ── */
+const sparkleMaskFrag = `#version 300 es
+precision highp float;
+out vec4 outColor;
+uniform float time; uniform vec2 resolution;
+uniform sampler2D inputBuffer; uniform sampler2D prevBuffer;
+uniform float fadeOut;
+#define TAU 6.2831853
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+
+float getLuma(vec3 c) { return dot(c, vec3(0.299,0.587,0.114)); }
+
+float sparkleThreshold(float l) { return pow(smoothstep(0.7,1.0,l),2.0)*0.4; }
+
+float baseRadius(float l, vec2 px) {
+    return step(0.9,l)*20.0*2.5*mix(1.0,0.8,px.y/resolution.y);
 }
 
-const prog = gl.createProgram();
-gl.attachShader(prog, createShader(gl.VERTEX_SHADER, vertSrc));
-gl.attachShader(prog, createShader(gl.FRAGMENT_SHADER, fragSrc));
-gl.linkProgram(prog);
-gl.useProgram(prog);
+vec3 sparkleShape(vec2 px, vec2 cc, float rad, float ct) {
+    vec2 ctr = (cc+0.5)*20.0;
+    vec2 tp = px - ctr;
+    float pd = length(tp), pa = atan(tp.y, tp.x);
+    float h1 = hash(cc+vec2(7,3));
+    float wb = 1.0+0.2*0.2*sin(pa*2.0+time*0.3+h1*TAU)+0.2*0.1*sin(pa*3.0+time*0.2);
+    float feIn = smoothstep(0.0, 0.1, ct);
+    float feOut = 1.0-smoothstep(0.2, 1.0, ct);
+    float fe = feIn*feOut;
+    float cd = (pd/wb)/max(rad*0.6,1.0);
+    float core = (1.0-smoothstep(0.34,0.85,clamp(cd,0.0,1.0)))*fe;
+    float ge = max(rad*0.6,1.0)*wb*0.45;
+    float gd = max(length(tp)-ge,0.0);
+    float glow = 0.0;
+    if (gd < 20.0) glow = pow(1.0-clamp(gd/20.0,0.0,1.0),2.0)*0.65*fe;
 
-const quad = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
+    float sc = floor(mix(4.0,5.0,h1));
+    float gr = 1.0-pow(1.0-clamp(ct/0.4,0.0,1.0),3.0);
+    float bs = TAU/sc;
+    float ai = floor((pa+TAU/14.0*(0.5+0.5*sin(time*0.3)))/bs+0.5);
+    float ba = TAU; float sl = 0.0; float so = 1.0;
+    for (float o = -1.0; o <= 1.0; o += 1.0) {
+        float idx = mod(ai+o,sc);
+        float sa = -TAU/14.0*(0.5+0.5*sin(time*0.3)) + idx*bs;
+        float ad = abs(mod(pa-sa+3.14159,TAU)-3.14159);
+        if (ad < ba) { ba = ad; sl = mix(3.0,4.0,hash(cc+vec2(idx*7.13,idx*11.97)))*gr; so = mix(0.8,1.0,hash(cc+vec2(idx*13.37,idx*17.53))); }
+    }
+    float sd = cd/sl, sw = 2.0*pow(1.0-clamp(sd,0.0,1.0),mix(6.0,50.0,clamp((sl-3.0)/6.0,0.0,1.0)));
+    float streak = smoothstep(sw,sw*0.15,ba)*(1.3-clamp(sd,0.0,1.0))*step(sd,1.0)*so*fe;
+    float sgd = sin(max(ba-sw,0.0))*pd;
+    float sgl = (1.0-clamp(sgd/17.0,0.0,1.0))*(0.9-clamp(sd,0.0,1.0))*step(sd,1.0)*so*fe;
+    return vec3(core, max(streak,sgl), glow);
+}
+
+void main() {
+    vec2 px = gl_FragCoord.xy, uv = px/resolution;
+    vec4 cs = texture(inputBuffer, uv);
+    if (cs.a < 0.01) { outColor = vec4(0); return; }
+    float luma = getLuma(cs.rgb);
+    vec2 cell = floor(px/20.0);
+    vec4 maxM = vec4(0);
+    for (int dx = -4; dx <= 4; dx++) for (int dy = -4; dy <= 4; dy++) {
+        vec2 cc = cell + vec2(float(dx),float(dy));
+        vec2 ctr = (cc+0.5)*20.0;
+        vec2 tp2 = px-ctr;
+        if (dot(tp2,tp2) > 40000.0) continue;
+        float cl = getLuma(texture(inputBuffer, ctr/resolution).rgb);
+        float po = hash(cc+vec2(42,13));
+        float cd2 = 1.0*mix(0.8,1.2,hash(cc+vec2(77,31)));
+        float lt = time+po*cd2;
+        float ci = floor(lt/cd2), ct2 = mod(lt,cd2);
+        float st = hash(cc+vec2(ci*1.731,ci*2.399));
+        if (st >= sparkleThreshold(cl)) continue;
+        float rad = baseRadius(cl,ctr) * mix(0.9,1.1,hash(cc+vec2(123,456)));
+        if (rad < 0.5) continue;
+        float sr = rad*5.0+rad*0.5; sr*=sr;
+        if (dot(tp2,tp2) > sr) continue;
+        vec3 m = sparkleShape(px, cc, rad, ct2);
+        maxM.rgb = max(maxM.rgb, m);
+    }
+    vec4 prev = texture(prevBuffer, uv) * fadeOut;
+    outColor = vec4(max(prev.rgb, maxM.rgb), 0.0);
+}
+`;
+
+/* ── Pass 3: Composite sparkles ── */
+const compositeFrag = `#version 300 es
+precision highp float;
+out vec4 outColor;
+uniform sampler2D inputBuffer;
+uniform sampler2D sparkleMask;
+uniform vec2 uResolution;
+
+vec3 hardLight(vec3 b, vec3 bl) {
+    return mix(2.0*b*bl, 1.0-2.0*(1.0-b)*(1.0-bl), step(0.5,bl));
+}
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / uResolution;
+    vec4 inp = texture(inputBuffer, uv);
+    vec3 m = texture(sparkleMask, uv).rgb;
+    vec3 base = inp.rgb;
+    vec3 wc = mix(base, hardLight(base, vec3(1)), m.r);
+    vec3 wg = mix(wc, hardLight(wc, vec3(1,0.9,0.83)), m.b*(1.0-m.r));
+    vec3 ws = mix(wg, hardLight(wg, vec3(1,0.97,0.87)), m.g);
+    outColor = vec4(ws, 1.0);
+}
+`;
+
+function mkShader(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
+  return s;
+}
+function mkProg(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, mkShader(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, mkShader(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p); return p;
+}
+
+const oceanProg = mkProg(quadVert, oceanFrag);
+const sparkleProg = mkProg(quadVert, sparkleMaskFrag);
+const compProg = mkProg(quadVert, compositeFrag);
+
+const quad = new Float32Array([-1,-1,1,-1,-1,1,1,1]);
 const vbo = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
 gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
-const aPos = gl.getAttribLocation(prog, 'aPos');
-gl.enableVertexAttribArray(aPos);
-gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+function bindQuad(p) { const a = gl.getAttribLocation(p,'aPos'); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0); }
 
-const noiseSize = 256;
-const noiseData = new Uint8Array(noiseSize * noiseSize);
-for (let i = 0; i < noiseData.length; i++) noiseData[i] = Math.random() * 255 | 0;
-const noiseTex = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, noiseTex);
-gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, noiseSize, noiseSize, 0, gl.RED, gl.UNSIGNED_BYTE, noiseData);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+const nSz = 256, nD = new Uint8Array(nSz*nSz);
+for (let i = 0; i < nD.length; i++) nD[i] = Math.random()*255|0;
+const nTex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, nTex);
+gl.texImage2D(gl.TEXTURE_2D,0,gl.R8,nSz,nSz,0,gl.RED,gl.UNSIGNED_BYTE,nD);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.REPEAT);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.REPEAT);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
 
-const loc = n => gl.getUniformLocation(prog, n);
-gl.activeTexture(gl.TEXTURE0);
-gl.bindTexture(gl.TEXTURE_2D, noiseTex);
-gl.uniform1i(loc('uNoiseTexture'), 0);
-
-const uTime = loc('uTime');
-const uRes = loc('uResolution');
-const start = performance.now();
-
-function frame() {
-  const w = canvas.width, h = canvas.height;
-  gl.viewport(0, 0, w, h);
-  gl.uniform2f(uRes, w, h);
-  gl.uniform1f(uTime, (performance.now() - start) * 0.001);
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  requestAnimationFrame(frame);
+function mkFBO(w,h) {
+  const fbo = gl.createFramebuffer(), tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,tex,0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { fbo, tex };
 }
-frame();
+
+let oceanFBO = mkFBO(W,H), maskA = mkFBO(W,H), maskB = mkFBO(W,H), maskSwap = false;
+
+gl.useProgram(oceanProg); bindQuad(oceanProg);
+const oL = n => gl.getUniformLocation(oceanProg, n);
+
+gl.useProgram(sparkleProg); bindQuad(sparkleProg);
+const sL = n => gl.getUniformLocation(sparkleProg, n);
+gl.uniform2f(sL('resolution'), W, H);
+gl.uniform1f(sL('fadeOut'), 0.82);
+
+gl.useProgram(compProg); bindQuad(compProg);
+const cL = n => gl.getUniformLocation(compProg, n);
+
+const t0 = performance.now();
+
+window.__bgFrame = function bgFrame() {
+  const t = (performance.now() - t0) * 0.001;
+
+  gl.useProgram(oceanProg);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, oceanFBO.fbo);
+  gl.viewport(0,0,W,H);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, nTex);
+  gl.uniform1i(oL('uNoiseTexture'),0);
+  gl.uniform2f(oL('uResolution'),W,H);
+  gl.uniform1f(oL('uTime'),t);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+
+  const rM = maskSwap?maskB:maskA, wM = maskSwap?maskA:maskB;
+  gl.useProgram(sparkleProg);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, wM.fbo);
+  gl.viewport(0,0,W,H);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, oceanFBO.tex);
+  gl.uniform1i(sL('inputBuffer'),0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, rM.tex);
+  gl.uniform1i(sL('prevBuffer'),1);
+  gl.uniform1f(sL('time'),t);
+  gl.uniform2f(sL('resolution'),W,H);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  maskSwap = !maskSwap;
+
+  gl.useProgram(compProg);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0,0,W,H);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, oceanFBO.tex);
+  gl.uniform1i(cL('inputBuffer'),0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, wM.tex);
+  gl.uniform1i(cL('sparkleMask'),1);
+  gl.uniform2f(cL('uResolution'),W,H);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+};
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════
+     FOREGROUND: Three.js garden (transparent sky)
+     ═══════════════════════════════════════════ -->
+<script type="module">
+import * as THREE from 'three';
+import { createTree, TREE_CONFIGS } from '../garden/js/tree.js';
+import { windUniforms, updateWind } from '../garden/js/wind.js';
+
+const fgCanvas = document.getElementById('fg');
+const container = document.querySelector('.frame');
+
+const renderer = new THREE.WebGLRenderer({
+  canvas: fgCanvas, antialias: true, alpha: true
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.setClearColor(0x000000, 0);
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(
+  35, container.clientWidth / container.clientHeight, 0.1, 200
+);
+camera.position.set(0, 4, 32);
+camera.lookAt(0, 3.5, -20);
+
+const dirLight = new THREE.DirectionalLight(0xF7EFD5, 8);
+dirLight.position.set(-5, 42, -42);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.set(2048, 2048);
+dirLight.shadow.camera.near = 1;
+dirLight.shadow.camera.far = 100;
+dirLight.shadow.camera.left = -30;
+dirLight.shadow.camera.right = 30;
+dirLight.shadow.camera.top = 30;
+dirLight.shadow.camera.bottom = -30;
+dirLight.shadow.bias = -0.0005;
+scene.add(dirLight);
+
+const fillLight = new THREE.DirectionalLight(0xF2FDC2, 0.8);
+fillLight.position.set(-5, 25, 28);
+scene.add(fillLight);
+
+scene.add(new THREE.AmbientLight(0xAEB983, 1.0));
+
+const texLoader = new THREE.TextureLoader();
+const concreteTex = texLoader.load('../garden/textures/concrete.webp');
+concreteTex.colorSpace = THREE.SRGBColorSpace;
+concreteTex.wrapS = concreteTex.wrapT = THREE.RepeatWrapping;
+
+const groundGeo = new THREE.PlaneGeometry(60, 60);
+const groundMat = new THREE.MeshStandardMaterial({
+  map: concreteTex, color: 0x51AC55
+});
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.5;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const adjustedConfigs = TREE_CONFIGS.map(c => ({
+  ...c,
+  settings: {
+    ...c.settings,
+    leafTexture: '../garden/' + c.settings.leafTexture
+  }
+}));
+
+for (const config of adjustedConfigs) {
+  createTree(scene, config, windUniforms);
+}
+
+const grassOverlay = document.createElement('div');
+grassOverlay.style.cssText = `
+  position:absolute; bottom:0; left:0; right:0; height:100%;
+  pointer-events:none;
+  background: url(../garden/textures/grass.webp) center/cover no-repeat;
+  mix-blend-mode: screen;
+  opacity: 0.25;
+`;
+container.appendChild(grassOverlay);
+
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+  const elapsed = clock.getElapsedTime();
+  updateWind(elapsed, delta);
+  renderer.render(scene, camera);
+  if (window.__bgFrame) window.__bgFrame();
+}
+
+window.addEventListener('resize', () => {
+  const w = container.clientWidth, h = container.clientHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+});
+
+animate();
 </script>
 </body>
 </html>
