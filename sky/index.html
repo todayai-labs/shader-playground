@@ -20,9 +20,8 @@
   .main-row { display: flex; gap: 24px; align-items: flex-start; }
   .wrap {
     position: relative;
-    width: 280px; height: 605px;
-    overflow: hidden; border-radius: 8px;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+    width: 403px; height: 641px;
+    overflow: hidden; border-radius: 4px;
     flex-shrink: 0;
   }
   canvas { display: block; width: 100%; height: 100%; }
@@ -35,14 +34,14 @@
     transition: opacity 0.3s;
   }
   .desc {
-    width: 280px; margin-top: 20px;
+    width: 403px; margin-top: 20px;
     font-size: 0.8rem; line-height: 1.6; color: #666;
   }
   .desc strong { display: block; font-size: 0.75rem; margin-top: 12px; }
 
   /* Config Panel */
   .panel {
-    width: 300px; max-height: 620px;
+    width: 300px; max-height: 660px;
     overflow-y: auto; overflow-x: hidden;
     background: #fff;
     border-radius: 8px;
@@ -130,20 +129,20 @@ const DEFAULTS = {
   cloudSpeed:    0.008,
   cloudOpacity:  0.45,
 
-  risoEnabled:   true,
-  risoColor:     '#4D7A8C',
+  risoEnabled:   false,
+  risoColor:     '#8A9BAA',
   dotSpacing:    1.0,
   dotRadius:     0.5,
-  blurRadius:    80,
-  blurAmount:    0.7,
-  highlightColor:'#BFC8D1',
+  blurRadius:    60,
+  blurAmount:    0.85,
+  highlightColor:'#D8DDE4',
 
-  borderEnabled:   true,
+  borderEnabled:   false,
   borderRisoFade:  15,
   borderBlurFade:  15,
   borderBlurInset: 12,
 
-  overlayOpacity: 1.0,
+  overlayOpacity: 0.0,
 };
 
 const STORAGE_KEY = 'sky-shader-config';
@@ -311,7 +310,7 @@ function showToast(msg) {
 /* ══════════════════════════════════
    SHADERS
    ══════════════════════════════════ */
-const CW = 280, CH = 605;
+const CW = 403, CH = 641;
 const canvas = document.getElementById('c');
 const dpr = Math.min(window.devicePixelRatio, 2);
 canvas.width = CW * dpr;
@@ -501,20 +500,23 @@ const t0 = performance.now();
 
 function frame() {
   const t = (performance.now() - t0) * 0.001;
+  const needRiso = cfg.risoEnabled || cfg.borderEnabled;
 
   gl.useProgram(skyP);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, skyFBO.fbo);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, needRiso ? skyFBO.fbo : null);
   gl.viewport(0, 0, W, H);
   gl.uniform1f(skL('uTime'), t);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-  gl.useProgram(risoP);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.viewport(0, 0, W, H);
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, skyFBO.tex);
-  gl.uniform1i(rL('inputBuffer'), 0);
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  if (needRiso) {
+    gl.useProgram(risoP);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, skyFBO.tex);
+    gl.uniform1i(rL('inputBuffer'), 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
 
   requestAnimationFrame(frame);
 }
