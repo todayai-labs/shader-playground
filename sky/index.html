@@ -124,10 +124,10 @@ const DEFAULTS = {
   gradMidPos:    0.6154,
   gradBottom:    '#FFDDB9',
 
-  cloudDensity:  0.45,
-  cloudSoft:     0.55,
-  cloudSpeed:    0.008,
-  cloudOpacity:  0.45,
+  cloudDensity:  0.75,
+  cloudSoft:     0.25,
+  cloudSpeed:    0.006,
+  cloudOpacity:  0.60,
 
   risoEnabled:   false,
   risoColor:     '#8A9BAA',
@@ -336,17 +336,28 @@ uniform float uCloudDensity, uCloudSoft, uCloudSpeed, uCloudOpacity;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
+    f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
     return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
 }
-float fbm(vec2 p) {
+float fbm(vec2 p, int oct) {
     float v = 0.0, a = 0.5;
     mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
-    for (int i = 0; i < 6; i++) { v += a * noise(p); p = rot * p * 2.0 + vec2(1.7, 9.2); a *= 0.5; }
+    for (int i = 0; i < 8; i++) {
+        if (i >= oct) break;
+        v += a * noise(p);
+        p = rot * p * 2.0 + vec2(1.7, 9.2);
+        a *= 0.5;
+    }
     return v;
 }
-float cloudLayer(vec2 uv, vec2 scale, float speed, float yCenter, float ySpread) {
-    return fbm(uv * scale + vec2(uTime * speed, 0.0)) * (1.0 - smoothstep(0.0, ySpread, abs(uv.y - yCenter)));
+
+float cloudShape(vec2 uv, vec2 center, vec2 size, float seed) {
+    vec2 d = (uv - center) / size;
+    float falloff = 1.0 - smoothstep(0.0, 1.0, length(d));
+    vec2 p = uv * 4.0 + vec2(uTime * uCloudSpeed, seed);
+    float n = fbm(p, 7);
+    float detail = fbm(p * 2.5 + 3.14, 5) * 0.4;
+    return falloff * smoothstep(0.3 - uCloudDensity * 0.25, 0.3 + uCloudSoft * 0.2, n + detail * 0.5);
 }
 
 void main() {
@@ -356,17 +367,20 @@ void main() {
         ? mix(uGradTop, uGradMid, t / uGradMidPos)
         : mix(uGradMid, uGradBottom, (t - uGradMidPos) / (1.0 - uGradMidPos));
 
-    float c1 = cloudLayer(uv, vec2(3.0, 1.5), uCloudSpeed, 0.65, 0.35);
-    float c2 = cloudLayer(uv, vec2(5.0, 2.5), uCloudSpeed * 1.5, 0.55, 0.30);
-    float c3 = cloudLayer(uv, vec2(8.0, 4.0), uCloudSpeed * 0.6, 0.72, 0.25);
-    float c4 = cloudLayer(uv, vec2(2.0, 1.0), uCloudSpeed * 0.4, 0.45, 0.40);
-    float clouds = c1 * 0.35 + c2 * 0.25 + c3 * 0.2 + c4 * 0.2;
-    clouds = smoothstep(0.5 - uCloudDensity * 0.4, 0.5 + uCloudSoft * 0.3, clouds);
+    float clouds = 0.0;
+    clouds += cloudShape(uv, vec2(0.35, 0.62), vec2(0.35, 0.18), 0.0) * 0.9;
+    clouds += cloudShape(uv, vec2(0.70, 0.55), vec2(0.30, 0.15), 5.0) * 0.8;
+    clouds += cloudShape(uv, vec2(0.20, 0.48), vec2(0.25, 0.12), 11.0) * 0.6;
+    clouds += cloudShape(uv, vec2(0.80, 0.70), vec2(0.28, 0.14), 17.0) * 0.7;
+    clouds += cloudShape(uv, vec2(0.50, 0.75), vec2(0.40, 0.16), 23.0) * 0.5;
+    clouds += cloudShape(uv, vec2(0.15, 0.68), vec2(0.22, 0.10), 31.0) * 0.4;
+    clouds = min(clouds, 1.0);
 
-    vec3 cc = sky + vec3(0.10, 0.08, 0.06);
-    sky = mix(sky, min(cc, vec3(1.0)), clouds * uCloudOpacity);
+    vec3 cloudColor = mix(sky, vec3(1.0), 0.5) + vec3(0.03, 0.02, 0.01);
+    cloudColor = min(cloudColor, vec3(1.0));
+    sky = mix(sky, cloudColor, clouds * uCloudOpacity);
 
-    float glow = exp(-pow((uv.y - 0.35) * 3.0, 2.0)) * 0.06;
+    float glow = exp(-pow((uv.y - 0.35) * 3.0, 2.0)) * 0.05;
     sky += vec3(1.0, 0.95, 0.88) * glow;
 
     outColor = vec4(sky, 1.0);
