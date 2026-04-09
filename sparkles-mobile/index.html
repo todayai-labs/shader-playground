@@ -7,22 +7,19 @@
 <script src="../nav.js?v=2" defer></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; background: #e8e4e0; }
+  html, body { width: 100%; height: 100%; background: #0a0a0c; }
   body {
     display: flex; flex-direction: column;
     align-items: center;
     padding: 50px 20px 40px;
-    font-family: 'Georgia', serif; color: #333;
+    font-family: -apple-system, 'SF Pro', 'Helvetica Neue', sans-serif; color: #fff;
   }
-  .title { text-align: center; margin-bottom: 20px; }
-  .title h1 { font-size: 1rem; font-weight: 600; }
-  .title p { font-size: 0.75rem; color: #888; margin-top: 2px; }
   .wrap {
     position: relative;
     width: 280px; height: 605px;
     overflow: hidden;
     border-radius: 8px;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.4);
   }
   canvas { display: block; width: 100%; height: 100%; }
   .paper {
@@ -32,29 +29,13 @@
     mix-blend-mode: color-burn;
     object-fit: cover;
   }
-  .desc {
-    width: 280px; margin-top: 20px;
-    font-size: 0.8rem; line-height: 1.6; color: #666;
-  }
-  .desc strong { display: block; font-size: 0.75rem; margin-top: 12px; }
 </style>
 </head>
 <body>
 
-<div class="title">
-  <h1>Sparkles — iPhone 9:21</h1>
-  <p>Mar 2026</p>
-</div>
-
 <div class="wrap">
   <canvas id="c"></canvas>
   <img class="paper" src="canvas.png" alt="">
-</div>
-
-<div class="desc">
-  <p>Sparkles on a lake — full 4-pass pipeline at 9:21 iPhone portrait ratio.</p>
-  <strong>Dev Notes.</strong>
-  <p>Raymarching, post processed sparkles, and frequency modulated halftones.</p>
 </div>
 
 <script>

@@ -7,75 +7,103 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    background: #f2f0ee;
-    font-family: 'Georgia', serif;
-    color: #333;
     min-height: 100vh;
+    background: #0a0a0c;
+    color: #fff;
+    font-family: -apple-system, 'SF Pro', 'Helvetica Neue', sans-serif;
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 60px 20px;
+    padding: 72px 24px 60px;
   }
+
   h1 {
-    font-size: 1.1rem;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    margin-bottom: 40px;
+    font-size: 26px;
+    font-weight: 300;
+    letter-spacing: -0.02em;
+    color: rgba(255,255,255,0.85);
+    margin-bottom: 48px;
   }
+
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 32px;
-    max-width: 700px;
+    gap: 18px;
     width: 100%;
+    max-width: 960px;
   }
+
   .card {
+    position: relative;
+    border-radius: 14px;
+    overflow: hidden;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.06);
+    transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1), border-color 0.3s, box-shadow 0.3s;
+    cursor: pointer;
     text-decoration: none;
     color: inherit;
-    border-radius: 6px;
-    overflow: hidden;
-    transition: transform 0.25s, box-shadow 0.25s;
-    background: #fff;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    display: block;
   }
   .card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+    transform: translateY(-4px) scale(1.01);
+    border-color: rgba(255,255,255,0.14);
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
   }
-  .card .thumb {
-    width: 100%;
-    aspect-ratio: 1.4;
-    object-fit: cover;
-    display: block;
-    background: #e0d8d0;
+
+  .card-preview {
+    height: 140px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
   }
-  .card .info {
-    padding: 14px 16px;
+
+  .card-body {
+    padding: 16px 18px 18px;
   }
-  .card .info h2 {
-    font-size: 0.85rem;
-    font-weight: 600;
-    margin-bottom: 4px;
+  .card-title {
+    font-size: 15px;
+    font-weight: 500;
+    color: rgba(255,255,255,0.9);
   }
-  .card .info p {
-    font-size: 0.72rem;
-    color: #888;
-    line-height: 1.5;
-  }
-  .kbd {
+  .card-tag {
     display: inline-block;
-    background: #e8e4e0;
-    border-radius: 3px;
-    padding: 1px 6px;
-    font-family: monospace;
-    font-size: 0.7rem;
-    color: #666;
-    margin-left: 2px;
+    margin-top: 8px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.3);
   }
+
+  .preview-glow {
+    width: 80px; height: 80px;
+    border-radius: 50%;
+    animation: pulse 4s ease-in-out infinite;
+    box-shadow: 0 0 40px var(--glow-color, rgba(120,140,220,0.15));
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 0.7; border-radius: 48% 52% 50% 50% / 52% 48% 52% 48%; }
+    50% { transform: scale(1.06); opacity: 1; border-radius: 50% 48% 52% 48% / 48% 52% 50% 52%; }
+  }
+
   .hint {
-    margin-top: 40px;
-    font-size: 0.72rem;
-    color: #aaa;
+    margin-top: 48px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.2);
+  }
+  .hint .kbd {
+    display: inline-block;
+    background: rgba(255,255,255,0.08);
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-family: monospace;
+    font-size: 11px;
+    color: rgba(255,255,255,0.35);
+    margin: 0 1px;
+    border: 1px solid rgba(255,255,255,0.06);
   }
 </style>
 </head>
@@ -85,18 +113,19 @@
 
 <div class="grid" id="grid"></div>
 
-<p class="hint">Press <span class="kbd">←</span> <span class="kbd">→</span> to navigate between shaders on each page</p>
+<p class="hint"><span class="kbd">←</span> <span class="kbd">→</span> switch shaders</p>
 
 <script>
 const SHADERS = [
-  { id: 'ocean', title: 'Ocean Shader', desc: 'Sparkles on ocean surface — raw WebGL2 fullscreen shader', url: 'ocean-shader.html' },
-  { id: 'garden', title: 'Garden', desc: 'Dappled light through invisible trees — Three.js PCSS + OKLab color grading', url: 'garden/index.html' },
-  { id: 'sparkles', title: 'Sparkles', desc: 'Lake with raymarched waves, sun glints, and halftone overlay', url: 'sparkles/index.html' },
-  { id: 'fog', title: 'Fog hover', desc: 'CSS mask-image spotlight that reveals images through fog on cursor hover', url: 'fog/index.html' },
-  { id: 'landscape', title: 'Landscape', desc: 'Ocean horizon with grass foreground — sparkles + garden combined in iOS portrait', url: 'landscape/index.html' },
+  { id: 'ocean',           title: 'Ocean',         tag: 'WebGL2',            gradient: ['#4a7c9b','#2a4a6b','#1a2a3b'], url: 'ocean-shader.html' },
+  { id: 'garden',          title: 'Garden',         tag: 'Three.js · PCSS',   gradient: ['#5a8a5a','#3a6a4a','#1a3a2a'], url: 'garden/index.html' },
+  { id: 'sparkles',        title: 'Sparkles',       tag: 'WebGL2',            gradient: ['#8a7a5a','#6a5a3a','#3a2a1a'], url: 'sparkles/index.html' },
+  { id: 'fog',             title: 'Fog',            tag: 'CSS Mask',          gradient: ['#6a6a7a','#4a4a5a','#2a2a3a'], url: 'fog/index.html' },
+  { id: 'landscape',       title: 'Landscape',      tag: 'WebGL2 · Three.js', gradient: ['#5a7a6a','#3a5a4a','#1a3a2a'], url: 'landscape/index.html' },
+  { id: 'sparkles-mobile', title: 'Sparkles 9:21',  tag: 'WebGL2 · Portrait', gradient: ['#7a6a5a','#5a4a3a','#2a1a1a'], url: 'sparkles-mobile/index.html' },
+  { id: 'sky',             title: 'Sky',            tag: 'WebGL2',            gradient: ['#5a6a9a','#3a4a7a','#1a2a4a'], url: 'sky/index.html' },
 ];
 
-// expose for nav bar
 window.__SHADERS = SHADERS;
 
 const grid = document.getElementById('grid');
@@ -104,8 +133,14 @@ SHADERS.forEach(s => {
   const a = document.createElement('a');
   a.className = 'card';
   a.href = s.url;
-  a.innerHTML = `<div class="thumb" style="background:linear-gradient(135deg,#d8d0c8,#c8c0b8)"></div>
-    <div class="info"><h2>${s.title}</h2><p>${s.desc}</p></div>`;
+  a.innerHTML = `
+    <div class="card-preview">
+      <div class="preview-glow" style="background:linear-gradient(135deg,${s.gradient[0]},${s.gradient[1]},${s.gradient[2]});--glow-color:${s.gradient[0]}33"></div>
+    </div>
+    <div class="card-body">
+      <div class="card-title">${s.title}</div>
+      <span class="card-tag">${s.tag}</span>
+    </div>`;
   grid.appendChild(a);
 });
 </script>

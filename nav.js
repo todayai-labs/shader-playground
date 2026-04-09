@@ -1,10 +1,10 @@
 // Shared navigation bar for all shader pages
 (function() {
     const SHADERS = [
-        { id: 'ocean', title: 'Ocean Shader', url: '/ocean-shader.html' },
+        { id: 'ocean', title: 'Ocean', url: '/ocean-shader.html' },
         { id: 'garden', title: 'Garden', url: '/garden/index.html' },
         { id: 'sparkles', title: 'Sparkles', url: '/sparkles/index.html' },
-        { id: 'fog', title: 'Fog hover', url: '/fog/index.html' },
+        { id: 'fog', title: 'Fog', url: '/fog/index.html' },
         { id: 'landscape', title: 'Landscape', url: '/landscape/index.html' },
         { id: 'sparkles-mobile', title: 'Sparkles 9:21', url: '/sparkles-mobile/index.html' },
         { id: 'sky', title: 'Sky', url: '/sky/index.html' },
@@ -30,41 +30,62 @@
     style.textContent = `
         #shader-nav {
             position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
-            display: flex; align-items: center; gap: 8px;
+            display: flex; align-items: center; gap: 6px;
             padding: 6px 14px;
-            background: rgba(242,240,238,0.85);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border-bottom: 1px solid rgba(0,0,0,0.06);
-            font-family: -apple-system, 'Helvetica Neue', sans-serif;
+            background: rgba(10,10,12,0.82);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            font-family: -apple-system, 'SF Pro', 'Helvetica Neue', sans-serif;
             font-size: 12px;
         }
         #shader-nav .nav-home {
-            font-size: 16px; text-decoration: none; color: #666;
+            font-size: 15px; text-decoration: none;
+            color: rgba(255,255,255,0.4);
             margin-right: 4px; line-height: 1;
+            transition: color 0.2s;
         }
-        #shader-nav .nav-home:hover { color: #333; }
-        #shader-nav .nav-items { display: flex; gap: 2px; flex: 1; }
+        #shader-nav .nav-home:hover { color: rgba(255,255,255,0.8); }
+        #shader-nav .nav-items {
+            display: flex; gap: 2px; flex: 1;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+        }
+        #shader-nav .nav-items::-webkit-scrollbar { display: none; }
         #shader-nav .nav-item {
-            text-decoration: none; color: #999;
-            padding: 3px 10px; border-radius: 4px;
-            transition: background 0.15s, color 0.15s;
+            text-decoration: none;
+            color: rgba(255,255,255,0.35);
+            padding: 4px 10px; border-radius: 6px;
+            transition: background 0.2s, color 0.2s;
+            white-space: nowrap;
         }
-        #shader-nav .nav-item:hover { background: rgba(0,0,0,0.05); color: #555; }
+        #shader-nav .nav-item:hover {
+            background: rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.7);
+        }
         #shader-nav .nav-item.active {
-            background: rgba(0,0,0,0.07); color: #333; font-weight: 500;
+            background: rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.9);
+            font-weight: 500;
         }
         #shader-nav .nav-arrows { display: flex; gap: 4px; }
         #shader-nav .nav-key {
             display: inline-flex; align-items: center; justify-content: center;
             width: 24px; height: 22px;
-            background: rgba(0,0,0,0.06); border-radius: 4px;
-            color: #666; cursor: pointer; user-select: none;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 5px;
+            color: rgba(255,255,255,0.4);
+            cursor: pointer; user-select: none;
             font-size: 13px; line-height: 1;
-            transition: background 0.15s;
+            transition: background 0.2s, color 0.2s;
         }
-        #shader-nav .nav-key:hover:not(.disabled) { background: rgba(0,0,0,0.12); color: #333; }
-        #shader-nav .nav-key.disabled { opacity: 0.3; cursor: default; }
+        #shader-nav .nav-key:hover:not(.disabled) {
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.8);
+        }
+        #shader-nav .nav-key.disabled { opacity: 0.25; cursor: default; }
     `;
 
     document.head.appendChild(style);

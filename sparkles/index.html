@@ -8,17 +8,14 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    background: #e8e4e0;
-    font-family: 'Georgia', serif;
-    color: #333;
+    background: #0a0a0c;
+    font-family: -apple-system, 'SF Pro', 'Helvetica Neue', sans-serif;
+    color: #fff;
     display: flex;
     flex-direction: column;
     align-items: center;
     padding: 50px 20px 40px;
   }
-  .title { text-align: center; margin-bottom: 20px; }
-  .title h1 { font-size: 1rem; font-weight: 600; }
-  .title p { font-size: 0.75rem; color: #888; margin-top: 2px; }
   .wrap {
     position: relative;
     width: 500px; height: 307px;
@@ -32,33 +29,16 @@
     mix-blend-mode: color-burn;
     object-fit: cover;
   }
-  .desc {
-    width: 500px; margin-top: 20px;
-    font-size: 0.8rem; line-height: 1.6; color: #666;
-  }
-  .desc strong { display: block; font-size: 0.75rem; margin-top: 12px; }
   @media (max-width: 580px) {
     .wrap { width: 300px; height: 350px; }
-    .desc { width: 340px; }
   }
 </style>
 </head>
 <body>
 
-<div class="title">
-  <h1>Sparkles</h1>
-  <p>Mar 2026</p>
-</div>
-
 <div class="wrap">
   <canvas id="c"></canvas>
   <img class="paper" src="canvas.png" alt="">
-</div>
-
-<div class="desc">
-  <p>Sparkles on a lake, swans afloat, and alas, you are here.</p>
-  <strong>Dev Notes.</strong>
-  <p>Written with raymarching, post processed sparkles, and frequency modulated halftones.</p>
 </div>
 
 <script>
