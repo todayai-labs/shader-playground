@@ -38,14 +38,14 @@
         .grass {
             pointer-events: none;
             mix-blend-mode: screen;
-            background: url(textures/grass.webp) center/cover no-repeat;
+            background: url(/garden/textures/grass.webp) center/cover no-repeat;
             position: absolute;
             top: 0; bottom: 0; left: 0; right: 0;
         }
         .cover {
             pointer-events: none;
             mix-blend-mode: darken;
-            background: url(textures/cover.png) center/cover no-repeat;
+            background: url(/garden/textures/cover.png) center/cover no-repeat;
             outline: 30px solid #0a0a0c;
             position: absolute;
             top: 0; bottom: 0; left: 0; right: 0;
@@ -54,7 +54,7 @@
             .canvas { width: 300px; height: 350px; }
         }
     </style>
-<script src="../nav.js?v=2" defer></script>
+<script src="/nav.js?v=2" defer></script>
 </head>
 <body>
     <div class="page">
@@ -73,6 +73,6 @@
         }
     }
     </script>
-    <script type="module" src="js/main.js"></script>
+    <script type="module" src="/garden/js/main.js"></script>
 </body>
 </html>

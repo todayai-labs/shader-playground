@@ -16,6 +16,6 @@ A standalone recreation of the ocean sparkle effect from [farayan.me/sparkles](h
 
 **Run locally:**
 ```bash
-python3 -m http.server 8765
-# Open http://localhost:8765/ocean-shader.html
+serve .
+# Open http://localhost:3000
 ```

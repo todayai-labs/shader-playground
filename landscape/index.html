@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
 <title>Landscape</title>
-<script src="../nav.js?v=2" defer></script>
+<script src="/nav.js?v=2" defer></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
@@ -34,13 +34,13 @@
     position: absolute; top: 0; left: 0; right: 0; bottom: 0;
     pointer-events: none;
     mix-blend-mode: screen;
-    background: url(../garden/textures/grass.webp) center/cover no-repeat;
+    background: url(/garden/textures/grass.webp) center/cover no-repeat;
   }
   .cover-overlay {
     position: absolute; top: 0; left: 0; right: 0; bottom: 0;
     pointer-events: none;
     mix-blend-mode: darken;
-    background: url(../garden/textures/cover.png) center/cover no-repeat;
+    background: url(/garden/textures/cover.png) center/cover no-repeat;
   }
 </style>
 <script type="importmap">
@@ -402,9 +402,9 @@ window.__bgFrame = function bgFrame() {
      ═══════════════════════════════════════════ -->
 <script type="module">
 import * as THREE from 'three';
-import { createTree, TREE_CONFIGS } from '../garden/js/tree.js';
-import { windUniforms, updateWind } from '../garden/js/wind.js';
-import { createPostProcessing } from '../garden/js/postprocessing.js';
+import { createTree, TREE_CONFIGS } from '/garden/js/tree.js';
+import { windUniforms, updateWind } from '/garden/js/wind.js';
+import { createPostProcessing } from '/garden/js/postprocessing.js';
 
 // PCSS soft shadows (copied from garden/js/main.js)
 (function installPCSS() {
@@ -465,7 +465,7 @@ scene.add(fillLight);
 scene.add(new THREE.AmbientLight(0xAEB983, 1.2));
 
 const texLoader = new THREE.TextureLoader();
-const concreteTex = texLoader.load('../garden/textures/concrete.webp');
+const concreteTex = texLoader.load('/garden/textures/concrete.webp');
 concreteTex.colorSpace = THREE.SRGBColorSpace;
 concreteTex.wrapS = concreteTex.wrapT = THREE.RepeatWrapping;
 
@@ -478,15 +478,7 @@ ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
-const adjustedConfigs = TREE_CONFIGS.map(c => ({
-  ...c,
-  settings: {
-    ...c.settings,
-    leafTexture: '../garden/' + c.settings.leafTexture
-  }
-}));
-
-for (const config of adjustedConfigs) {
+for (const config of TREE_CONFIGS) {
   createTree(scene, config, windUniforms);
 }
 

@@ -61,7 +61,7 @@ const ambientLight = new THREE.AmbientLight(0xAEB983, 1.2);
 scene.add(ambientLight);
 
 const textureLoader = new THREE.TextureLoader();
-const concreteTexture = textureLoader.load('textures/concrete.webp');
+const concreteTexture = textureLoader.load('/garden/textures/concrete.webp');
 concreteTexture.colorSpace = THREE.SRGBColorSpace;
 concreteTexture.wrapS = concreteTexture.wrapT = THREE.RepeatWrapping;
 
