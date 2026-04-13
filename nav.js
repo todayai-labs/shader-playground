@@ -1,7 +1,11 @@
 // Shared navigation bar for all shader pages
 (function() {
+    if (window.parent !== window) return;
+    if (document.documentElement.classList.contains('garden-embed')) return;
+
     const SHADERS = [
         { id: 'ocean', title: 'Ocean', url: '/ocean-shader.html' },
+        { id: 'tree-shadow', title: 'Tree shadow', url: '/tree-shadow/index.html' },
         { id: 'garden', title: 'Garden', url: '/garden/index.html' },
         { id: 'sparkles', title: 'Sparkles', url: '/sparkles/index.html' },
         { id: 'fog', title: 'Fog', url: '/fog/index.html' },

@@ -22,7 +22,25 @@ float PCSS(sampler2D shadowMap,vec4 coords){vec2 uv=coords.xy;float zr=coords.z;
 })();
 
 const container = document.getElementById('scene-container');
-const { clientWidth: width, clientHeight: height } = container;
+function readContainerSize() {
+    let w = container.clientWidth;
+    let h = container.clientHeight;
+    if (document.documentElement.classList.contains('garden-embed')) {
+        if (w < 16 || h < 16) {
+            const wrap = container.closest('.canvas');
+            if (wrap) {
+                w = wrap.clientWidth;
+                h = wrap.clientHeight;
+            }
+        }
+        if (w < 16 || h < 16) {
+            w = window.innerWidth;
+            h = window.innerHeight;
+        }
+    }
+    return { width: Math.max(w, 2), height: Math.max(h, 2) };
+}
+const { width, height } = readContainerSize();
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
 renderer.setSize(width, height);
@@ -97,13 +115,23 @@ function animate() {
     postProcessing.render();
 }
 
-window.addEventListener('resize', () => {
-    const w = container.clientWidth;
-    const h = container.clientHeight;
+function syncSize() {
+    const { width: w, height: h } = readContainerSize();
+    if (w < 8 || h < 8) return;
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
     postProcessing.resize(w, h);
-});
+}
+
+window.addEventListener('resize', syncSize);
+
+if (document.documentElement.classList.contains('garden-embed')) {
+    const ro = new ResizeObserver(() => syncSize());
+    ro.observe(container);
+    if (container.parentElement) ro.observe(container.parentElement);
+    requestAnimationFrame(syncSize);
+    requestAnimationFrame(() => requestAnimationFrame(syncSize));
+}
 
 animate();
