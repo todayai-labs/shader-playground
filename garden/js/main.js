@@ -41,9 +41,15 @@ function readContainerSize() {
     return { width: Math.max(w, 2), height: Math.max(h, 2) };
 }
 const { width, height } = readContainerSize();
+const isGardenEmbed = document.documentElement.classList.contains('garden-embed');
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-renderer.setSize(width, height);
+const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: false,
+    /* Fewer cleared frames visible while the iframe is resizing (tradeoff: a bit more GPU memory). */
+    preserveDrawingBuffer: isGardenEmbed,
+});
+renderer.setSize(width, height, false);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -115,19 +121,67 @@ function animate() {
     postProcessing.render();
 }
 
+let lastAppliedW = Math.round(width);
+let lastAppliedH = Math.round(height);
+
 function syncSize() {
     const { width: w, height: h } = readContainerSize();
-    if (w < 8 || h < 8) return;
-    camera.aspect = w / h;
+    const rw = Math.round(w);
+    const rh = Math.round(h);
+    if (rw < 8 || rh < 8) return;
+    if (rw === lastAppliedW && rh === lastAppliedH) return;
+    lastAppliedW = rw;
+    lastAppliedH = rh;
+    camera.aspect = rw / rh;
     camera.updateProjectionMatrix();
-    renderer.setSize(w, h);
-    postProcessing.resize(w, h);
+    renderer.setSize(rw, rh, false);
+    postProcessing.resize(rw, rh);
 }
 
-window.addEventListener('resize', syncSize);
+/** Embed: ResizeObserver fires very often; each setSize() clears WebGL buffers → visible flash. Throttle + skip unchanged size. */
+const EMBED_RESIZE_MIN_MS = 80;
+let embedResizeRaf = 0;
+let embedResizePending = false;
+let lastEmbedResizeApply = performance.now();
 
-if (document.documentElement.classList.contains('garden-embed')) {
-    const ro = new ResizeObserver(() => syncSize());
+function scheduleSyncSizeEmbed() {
+    embedResizePending = true;
+    if (embedResizeRaf) return;
+    function tick() {
+        const now = performance.now();
+        if (embedResizePending && now - lastEmbedResizeApply >= EMBED_RESIZE_MIN_MS) {
+            embedResizePending = false;
+            const prevW = lastAppliedW;
+            const prevH = lastAppliedH;
+            syncSize();
+            if (lastAppliedW !== prevW || lastAppliedH !== prevH) {
+                lastEmbedResizeApply = now;
+            }
+        }
+        if (embedResizePending) {
+            embedResizeRaf = requestAnimationFrame(tick);
+        } else {
+            embedResizeRaf = 0;
+        }
+    }
+    embedResizeRaf = requestAnimationFrame(tick);
+}
+
+let resizeRaf = 0;
+function scheduleSyncSizeStandalone() {
+    if (resizeRaf) return;
+    resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0;
+        syncSize();
+    });
+}
+
+const scheduleSyncSize = isGardenEmbed ? scheduleSyncSizeEmbed : scheduleSyncSizeStandalone;
+
+window.addEventListener('resize', scheduleSyncSize);
+
+if (isGardenEmbed) {
+    const ro = new ResizeObserver(() => scheduleSyncSize());
     ro.observe(container);
     if (container.parentElement) ro.observe(container.parentElement);
     requestAnimationFrame(syncSize);

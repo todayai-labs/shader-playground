@@ -44,6 +44,8 @@
       z-index: 0;
       pointer-events: none;
       overflow: hidden;
+      background: #E0D0B8;
+      isolation: isolate;
     }
     /* Overscan hides iframe letterboxing, URL-bar jitter, and sub-pixel gaps */
     .garden-bg {
@@ -59,6 +61,7 @@
       outline: 0;
       display: block;
       transform: translate(-50%, -50%);
+      background: #E0D0B8;
     }
     /* Soft center lift so type + glass read on busy ground */
     .bg-veil {
@@ -538,20 +541,6 @@
       }
 
       gsap.ticker.add(imageTrail);
-    })();
-
-    (function () {
-      var stack = document.querySelector('.bg-stack');
-      function fitBg() {
-        if (!stack) return;
-        var w = Math.max(window.innerWidth, document.documentElement.clientWidth || 0);
-        var h = Math.max(window.innerHeight, document.documentElement.clientHeight || 0);
-        stack.style.width = w + 'px';
-        stack.style.height = h + 'px';
-      }
-      fitBg();
-      window.addEventListener('resize', fitBg);
-      window.addEventListener('orientationchange', fitBg);
     })();
 
     (function () {
